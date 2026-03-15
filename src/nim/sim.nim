@@ -53,12 +53,15 @@ proc tick_world*(world_index: int) =
 
 proc global_pos*(world: World, handle: BodyHandle): D3 =
   with_read_lock(world.external_data.lock):
-    result = world.external_data.pos[world.external_data.slot_to_dense[handle.slot]]
+    if world.external_data.is_valid_no_lock(handle):
+      result = world.external_data.pos[world.external_data.slot_to_dense[handle.slot]]
 
 proc global_rot*(world: World, handle: BodyHandle): QF =
   with_read_lock(world.external_data.lock):
-    result = world.external_data.rot[world.external_data.slot_to_dense[handle.slot]]
+    if world.external_data.is_valid_no_lock(handle):
+      result = world.external_data.rot[world.external_data.slot_to_dense[handle.slot]]
 
 proc global_dimensions*(world: World, handle: BodyHandle): F3 =
   with_read_lock(world.external_data.lock):
-    result = world.external_data.dimensions[world.external_data.slot_to_dense[handle.slot]]
+    if world.external_data.is_valid_no_lock(handle):
+      result = world.external_data.dimensions[world.external_data.slot_to_dense[handle.slot]]

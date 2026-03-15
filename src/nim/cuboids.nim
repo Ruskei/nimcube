@@ -52,12 +52,22 @@ proc is_valid*(data: InternalData, handle: BodyHandle): bool =
     data.generation[handle.slot] == handle.generation and
     data.slot_to_dense[handle.slot] != slot_invalid
 
-proc is_valid*(data: ExternalData, handle: BodyHandle): bool =
+proc is_valid_no_lock*(data: ExternalData, handle: BodyHandle): bool =
   return
     handle.slot >= 0 and
     handle.slot < data.generation.len and
     data.generation[handle.slot] == handle.generation and
     data.slot_to_dense[handle.slot] != slot_invalid
+
+proc is_valid*(data: ExternalData, handle: BodyHandle): bool =
+  var is_valid = false
+  with_read_lock(data.lock):
+    is_valid =
+      handle.slot >= 0 and
+      handle.slot < data.generation.len and
+      data.generation[handle.slot] == handle.generation and
+      data.slot_to_dense[handle.slot] != slot_invalid
+  result = is_valid
 
 proc create_cuboid*(
   data: InternalData,
