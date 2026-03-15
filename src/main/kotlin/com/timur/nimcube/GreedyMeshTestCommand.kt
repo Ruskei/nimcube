@@ -57,15 +57,6 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
 
         println("Total duration: $totalDuration")
 
-        val numBBs = nim.numBBs(chunkMeshIndex)
-        println("num bbs: $numBBs")
-//        Bukkit.getScheduler().runTaskTimer(plugin, Runnable {
-//            val selected = IntArray(10) { Random.nextInt(numBBs) }
-//            val interval = 0.9f
-//            for (i in selected)
-//                nim.getBB(chunkMeshIndex, i).showEdges(world, interval)
-//        }, 4, 4)
-
         return true
     }
 }
