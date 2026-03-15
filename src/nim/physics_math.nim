@@ -11,6 +11,8 @@ type
   FBB* = BB[float32]
   C_D3* {.bycopy.} = object
     x*, y*, z*: float64
+  C_F3* {.bycopy.} = object
+    x*, y*, z*: float32
   C_QF* {.bycopy.} = object
     x*, y*, z*, w*: float32
   C_FBB* {.bycopy.} = object
@@ -30,6 +32,11 @@ converter f3_to_d3*(v: F3): D3 =
   result.x = v.x.float64
   result.y = v.y.float64
   result.z = v.z.float64
+
+converter f3_to_c*(v: F3): C_F3 =
+  result.x = v.x
+  result.y = v.y
+  result.z = v.z
 
 proc `+`*[T](a: V3[T], b: V3[T]): V3[T] =
   result.x = a.x + b.x

@@ -21,41 +21,48 @@ class Cuboid(
     private var display: BlockDisplay? = null
 
     fun init() {
-        val pos = getPos()
-        val rot = getRot()
+        Arena.ofConfined().use { arena ->
+            init(arena)
+        }
+    }
+
+    fun init(arena: Arena) {
+        val pos = getPos(arena)
+        val rot = getRot(arena)
+        val dimensions = getDimensions(arena)
         display?.remove()
         display = bukkitWorld.spawnEntity(
             Location(bukkitWorld, pos.x, pos.y, pos.z),
             EntityType.BLOCK_DISPLAY,
         ) as BlockDisplay
         display!!.block = Material.GLASS.createBlockData()
-        display!!.transformation = createTransformation(rot)
+        display!!.transformation = createTransformation(rot, dimensions)
         display!!.interpolationDuration = 2
         display!!.interpolationDelay = 0
         display!!.teleportDuration = 2
     }
 
-    fun getPos(): Vector3d =
-        Arena.ofConfined().use { arena ->
-            nim.getCuboidPos(arena, worldIndex, handle)
-        }
+    fun getPos(arena: Arena): Vector3d =
+        nim.getCuboidPos(arena, worldIndex, handle)
 
-    fun getRot(): Quaternionf =
-        Arena.ofConfined().use { arena ->
-            nim.getCuboidRot(arena, worldIndex, handle)
-        }
+    fun getRot(arena: Arena): Quaternionf =
+        nim.getCuboidRot(arena, worldIndex, handle)
 
-    fun update() {
+    fun getDimensions(arena: Arena): Vector3f =
+        nim.getCuboidDimensions(arena, worldIndex, handle)
+
+    fun update(arena: Arena) {
         val display = display ?: run {
-            init()
+            init(arena)
             return
         }
-        val pos = getPos()
-        val rot = getRot()
+        val pos = getPos(arena)
+        val rot = getRot(arena)
+        val dimensions = getDimensions(arena)
         display.interpolationDuration = 2
         display.interpolationDelay = 0
         display.teleportDuration = 2
-        display.transformation = createTransformation(rot)
+        display.transformation = createTransformation(rot, dimensions)
         display.teleport(Location(bukkitWorld, pos.x, pos.y, pos.z))
     }
 
@@ -64,11 +71,12 @@ class Cuboid(
         display = null
     }
 
-    private fun createTransformation(rot: Quaternionf): Transformation {
-        val scale = Vector3f(1f, 1f, 1f)
+    private fun createTransformation(rot: Quaternionf, dimensions: Vector3f): Transformation {
+        val scale = Vector3f(dimensions.x, dimensions.y, dimensions.z)
+        val displayRot = Quaternionf(rot)
         return Transformation(
-            Vector3f(-0.5f).mul(scale).rotate(rot),
-            Quaternionf(rot),
+            Vector3f(-0.5f).mul(scale).rotate(displayRot),
+            displayRot,
             scale,
             Quaternionf(),
         )

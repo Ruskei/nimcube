@@ -4,6 +4,7 @@ import org.bukkit.Bukkit
 import org.bukkit.World
 import org.bukkit.scheduler.BukkitTask
 import org.joml.Vector3f
+import java.lang.foreign.Arena
 import kotlin.math.round
 
 class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val acceleration: Vector3f) {
@@ -20,7 +21,9 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         repeat(round(0.05 / dt).toInt()) {
             nim.tickWorld(worldIndex)
         }
-        cuboids.forEach { it.update() }
+        Arena.ofConfined().use { arena ->
+            cuboids.forEach { it.update(arena) }
+        }
     }
 
     fun deinit() {

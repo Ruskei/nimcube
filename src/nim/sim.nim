@@ -6,6 +6,8 @@ type
     vel: seq[F3]
     ω: seq[F3]
     rot: seq[QF]
+    dimensions: seq[F3]
+    inverse_mass: seq[float32]
     island_index: seq[int]
 
     dense_to_slot: seq[int]
@@ -60,6 +62,8 @@ proc create_cuboid(
   vel: F3,
   ω: F3,
   rot: QF,
+  dimensions: F3,
+  inverse_mass: float32,
 ): BodyHandle =
   let cuboids = world.cuboids
   var slot: int
@@ -78,6 +82,8 @@ proc create_cuboid(
   cuboids.vel.add vel
   cuboids.ω.add ω
   cuboids.rot.add normalized(rot)
+  cuboids.dimensions.add dimensions
+  cuboids.inverse_mass.add inverse_mass
   cuboids.island_index.add island_index
   cuboids.dense_to_slot.add slot
   cuboids.slot_to_dense[slot] = dense
@@ -89,6 +95,22 @@ proc local_pos(cuboids: Cuboids, handle: BodyHandle): F3 =
 
 proc rot(cuboids: Cuboids, handle: BodyHandle): QF =
   result = cuboids.rot[cuboids.slot_to_dense[handle.slot]]
+
+proc dimensions(cuboids: Cuboids, handle: BodyHandle): F3 =
+  result = cuboids.dimensions[cuboids.slot_to_dense[handle.slot]]
+
+proc inverse_mass(cuboids: Cuboids, handle: BodyHandle): float32 =
+  result = cuboids.inverse_mass[cuboids.slot_to_dense[handle.slot]]
+
+proc inverse_inertia(dimensions: F3, inverse_mass: float32): F3 =
+  if inverse_mass <= 0'f32:
+    return (0'f32, 0'f32, 0'f32)
+
+  let mass = 1'f32 / inverse_mass
+  let ix = (1'f32 / 12'f32) * mass * (dimensions.y * dimensions.y + dimensions.z * dimensions.z)
+  let iy = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.z * dimensions.z)
+  let iz = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.y * dimensions.y)
+  result = (1'f32 / ix, 1'f32 / iy, 1'f32 / iz)
 
 proc island_index(cuboids: Cuboids, handle: BodyHandle): int =
   result = cuboids.island_index[cuboids.slot_to_dense[handle.slot]]
@@ -104,6 +126,8 @@ proc c_create_cuboid(
   vel_x, vel_y, vel_z: float32;
   ω_x, ω_y, ω_z: float32;
   rot_x, rot_y, rot_z, rot_w: float32;
+  dimensions_x, dimensions_y, dimensions_z: float32;
+  inverse_mass: float32;
 ): C_BodyHandle {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return C_BodyHandle(slot: -1, generation: 0)
   let world = worlds[world_index]
@@ -114,6 +138,8 @@ proc c_create_cuboid(
     (vel_x, vel_y, vel_z),
     (ω_x, ω_y, ω_z),
     (rot_x, rot_y, rot_z, rot_w),
+    (dimensions_x, dimensions_y, dimensions_z),
+    inverse_mass,
   )
 
 proc c_get_global_cuboid_pos(world_index: cint, handle: C_BodyHandle): C_D3 {.cdecl, exportc, dynlib.} =
@@ -127,6 +153,18 @@ proc c_get_cuboid_rot(world_index: cint, handle: C_BodyHandle): C_QF {.cdecl, ex
   let world = worlds[world_index]
   if not world.valid: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
   result = world.cuboids.rot(handle)
+
+proc c_get_cuboid_dimensions(world_index: cint, handle: C_BodyHandle): C_F3 {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
+  let world = worlds[world_index]
+  if not world.valid: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
+  result = world.cuboids.dimensions(handle)
+
+proc c_get_cuboid_inverse_mass(world_index: cint, handle: C_BodyHandle): float32 {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return 0'f32
+  let world = worlds[world_index]
+  if not world.valid: return 0'f32
+  result = world.cuboids.inverse_mass(handle)
 
 proc create_world(
   Δt, acceleration_x, acceleration_y, acceleration_z: float32

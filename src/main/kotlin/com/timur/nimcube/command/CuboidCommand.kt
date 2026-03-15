@@ -36,7 +36,7 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                         plugin,
                         world,
                         0.01f,
-                        Vector3f(0f, -10f, 0f)
+                        Vector3f(0f, -1f, 0f)
                     ).also { it.init() }
                 }
             val cuboid = nim.createCuboid(
@@ -44,9 +44,11 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                     sender.location.x,
                     sender.location.y,
                     sender.location.z,
-                ), Vector3f(5f, 0f, 0f),
-                Vector3f(0f, 3f, 0f),
+                ), Vector3f(2f, 0f, 0f),
+                Vector3f(1f, 2f, 0f),
                 Quaternionf(),
+                Vector3f(2f, 1f, 0.5f),
+                0.5f,
             )
             val pos = nim.getCuboidPos(tempArena, nimWorld.worldIndex, cuboid)
             println("world: $nimWorld")
