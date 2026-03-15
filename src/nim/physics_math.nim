@@ -9,34 +9,11 @@ type
   Q*[T] = tuple[x, y, z, w: T]
   QF* = Q[float32]
   FBB* = BB[float32]
-  C_D3* {.bycopy.} = object
-    x*, y*, z*: float64
-  C_F3* {.bycopy.} = object
-    x*, y*, z*: float32
-  C_QF* {.bycopy.} = object
-    x*, y*, z*, w*: float32
-  C_FBB* {.bycopy.} = object
-    min_x*, min_y*, min_z*, max_x*, max_y*, max_z*: float32
-
-converter d3_to_c*(v: D3): C_D3 =
-  result.x = v.x
-  result.y = v.y
-  result.z = v.z
-
-converter d3_from_c*(v: C_D3): D3 =
-  result.x = v.x
-  result.y = v.y
-  result.z = v.z
 
 converter f3_to_d3*(v: F3): D3 =
   result.x = v.x.float64
   result.y = v.y.float64
   result.z = v.z.float64
-
-converter f3_to_c*(v: F3): C_F3 =
-  result.x = v.x
-  result.y = v.y
-  result.z = v.z
 
 proc `+`*[T](a: V3[T], b: V3[T]): V3[T] =
   result.x = a.x + b.x
@@ -107,9 +84,3 @@ proc normalized*[T: SomeFloat](q: Q[T]): Q[T] =
     return quat_identity(T)
   let invNorm = T(1) / sqrt(n2)
   q * invNorm
-
-converter qf_to_c*(q: QF): C_QF =
-  result.x = q.x
-  result.y = q.y
-  result.z = q.z
-  result.w = q.w

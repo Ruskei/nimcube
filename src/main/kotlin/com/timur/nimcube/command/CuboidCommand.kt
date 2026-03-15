@@ -1,6 +1,5 @@
 package com.timur.nimcube.command
 
-import com.timur.nimcube.Cuboid
 import com.timur.nimcube.NimWorld
 import com.timur.nimcube.Nimcube
 import org.bukkit.Bukkit
@@ -11,7 +10,6 @@ import org.bukkit.entity.Player
 import org.joml.Quaternionf
 import org.joml.Vector3d
 import org.joml.Vector3f
-import java.lang.foreign.Arena
 
 class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
     fun init() {
@@ -29,35 +27,30 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
         if (sender !is Player) return true
         val world = sender.world
 
-        Arena.ofConfined().use { tempArena ->
-            val nimWorld =
-                plugin.nimWorlds.getOrPut(world) {
-                    NimWorld(
-                        plugin,
-                        world,
-                        0.01f,
-                        Vector3f(0f, -1f, 0f)
-                    ).also { it.init() }
-                }
-            val cuboid = nim.createCuboid(
-                tempArena, nimWorld.worldIndex, Vector3d(
-                    sender.location.x,
-                    sender.location.y,
-                    sender.location.z,
-                ), Vector3f(2f, 0f, 0f),
-                Vector3f(1f, 2f, 0f),
-                Quaternionf(),
-                Vector3f(2f, 1f, 0.5f),
-                0.5f,
-            )
-            val pos = nim.getCuboidPos(tempArena, nimWorld.worldIndex, cuboid)
-            println("world: $nimWorld")
-            println("cuboid: $cuboid")
-            println("pos: $pos")
-            val bukkitCuboid = Cuboid(nimWorld, cuboid)
-            bukkitCuboid.init()
-            nimWorld.cuboids.add(bukkitCuboid)
-        }
+        val nimWorld =
+            plugin.nimWorlds.getOrPut(world) {
+                NimWorld(
+                    plugin,
+                    world,
+                    0.01f,
+                    Vector3f(0f, -1f, 0f)
+                ).also { it.init() }
+            }
+        val potentialBodyHandle = nim.createCuboid(
+            nimWorld.worldIndex,
+            Vector3d(
+                sender.location.x,
+                sender.location.y,
+                sender.location.z,
+            ),
+            Vector3f(2f, 0f, 0f),
+            Vector3f(1f, 2f, 0f),
+            Quaternionf(),
+            Vector3f(2f, 1f, 0.5f),
+            0.5f,
+        )
+
+        nimWorld.potentialBodyHandles += potentialBodyHandle
 
         return true
     }

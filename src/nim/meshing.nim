@@ -10,26 +10,26 @@ const
 
 type
   ## y-z-x order, lsb is first bit
-  ChunkBinaryData = array[chunk_width * chunk_width * chunk_height div sizeof(uint64), uint64]
+  ChunkBinaryData* = array[chunk_width * chunk_width * chunk_height div sizeof(uint64), uint64]
   ChunkMesh = object
-    origin: I3
-    bbs: seq[FBB] ## relative to origin
+    origin*: I3
+    bbs*: seq[FBB] ## relative to origin
 
-converter i3_to_f3(v: V3[int]): F3 =
+converter i3_to_f3*(v: V3[int]): F3 =
   (
     x: float32(v.x), 
     y: float32(v.y), 
     z: float32(v.z),
   )
 
-converter i3_32_to_f3(v: I3): F3 =
+converter i3_32_to_f3*(v: I3): F3 =
   (
     x: float32(v.x), 
     y: float32(v.y), 
     z: float32(v.z),
   )
 
-var chunk_meshes: seq[ChunkMesh]
+var chunk_meshes*: seq[ChunkMesh]
 
 type PackedRows = UncheckedArray[uint64]
 
@@ -113,10 +113,10 @@ proc build_exposed_rows(solid_rows: ptr PackedRows): seq[uint64] =
         exposed_z_neg or exposed_z_pos
 
 ## returns index of chunk mesh in chunk_meshes
-proc greedy_mesh(
+proc greedy_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
-): cint {.cdecl, exportc, dynlib.} =
+): cint =
   let start = get_mono_time()
 
   var bbs: seq[FBB]
@@ -170,18 +170,3 @@ proc greedy_mesh(
   echo "took=", in_milliseconds(finish - start), "ms"
 
   result = idx.cint
-
-proc num_bbs(chunk_mesh_index: cint): cint {.cdecl, exportc, dynlib.} =
-  if chunk_mesh_index >= chunk_meshes.len:
-    return -1
-  result = chunk_meshes[chunk_mesh_index].bbs.len.cint
-
-proc get_bb(chunk_mesh_index: cint, bb_index: cint): C_FBB {.cdecl, exportc, dynlib.} =
-  let bb = chunk_meshes[chunk_mesh_index].bbs[bb_index]
-  let origin: F3 = chunk_meshes[chunk_mesh_index].origin
-  result.min_x = origin.x + bb.min.x
-  result.min_y = origin.y + bb.min.y
-  result.min_z = origin.z + bb.min.z
-  result.max_x = origin.x + bb.max.x
-  result.max_y = origin.y + bb.max.y
-  result.max_z = origin.z + bb.max.z

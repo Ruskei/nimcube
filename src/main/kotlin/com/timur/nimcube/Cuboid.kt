@@ -17,7 +17,7 @@ class Cuboid(
     val nim = nimWorld.nim
     val bukkitWorld = nimWorld.bukkitWorld
     val worldIndex = nimWorld.worldIndex
-   
+
     private var display: BlockDisplay? = null
 
     fun init() {
