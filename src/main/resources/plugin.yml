@@ -1,0 +1,10 @@
+name: nimcube
+version: '0.0.0'
+main: com.timur.nimcube.Nimcube
+api-version: '1.21'
+load: STARTUP
+authors: [ Ruskei ]
+description: Library for reducing packets for display entities
+
+commands:
+  greedy_test:
