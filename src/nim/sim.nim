@@ -2,8 +2,8 @@ import physics_math
 
 type
   Cuboids = ref object
-    pos: seq[F3]
-    island_index: seq[uint]
+    local_pos: seq[F3]
+    island_index: seq[int]
 
     dense_to_slot: seq[int]
     slot_to_dense: seq[int]
@@ -47,9 +47,10 @@ proc is_valid(cuboids: Cuboids, handle: BodyHandle): bool =
     cuboids.slot_to_dense[handle.slot] != slot_invalid
 
 proc create_cuboid(
-  cuboids: Cuboids,
-  pos: F3
+  world: World,
+  pos: D3
 ): BodyHandle =
+  let cuboids = world.cuboids
   var slot: int
   if cuboids.free_slots.len > 0:
     slot = cuboids.free_slots.pop()
@@ -58,30 +59,42 @@ proc create_cuboid(
     cuboids.generation.add 0
     cuboids.slot_to_dense.add slot_invalid
 
-  let dense = cuboids.pos.len
-  cuboids.pos.add pos
+  let dense = cuboids.local_pos.len
+  let island = Island(pos: pos)
+  let island_index = world.islands.len
+  world.islands.add island
+  cuboids.local_pos.add (0'f32, 0'f32, 0'f32)
+  cuboids.island_index.add island_index
   cuboids.dense_to_slot.add slot
   cuboids.slot_to_dense[slot] = dense
 
   result = BodyHandle(slot: slot, generation: cuboids.generation[slot])
 
-proc pos(cuboids: Cuboids, handle: BodyHandle): F3 =
-  result = cuboids.pos[cuboids.slot_to_dense[handle.slot]]
+proc local_pos(cuboids: Cuboids, handle: BodyHandle): F3 =
+  result = cuboids.local_pos[cuboids.slot_to_dense[handle.slot]]
+
+proc island_index(cuboids: Cuboids, handle: BodyHandle): int =
+  result = cuboids.island_index[cuboids.slot_to_dense[handle.slot]]
+
+proc global_pos(world: World, handle: BodyHandle): D3 =
+  let local_pos: D3 = world.cuboids.local_pos handle
+  let island = world.islands[world.cuboids.island_index handle]
+  result = island.pos + local_pos
 
 proc c_create_cuboid(
   world_index: cint,
-  pos: C_F3,
+  pos: C_D3,
 ): C_BodyHandle {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return C_BodyHandle(slot: -1, generation: 0)
   let world = worlds[world_index]
   if not world.valid: return C_BodyHandle(slot: -1, generation: 0)
-  result = create_cuboid(world.cuboids, pos)
+  result = create_cuboid(world, pos)
 
-proc c_get_cuboid_pos(world_index: cint, handle: C_BodyHandle): C_F3 {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
+proc c_get_global_cuboid_pos(world_index: cint, handle: C_BodyHandle): C_D3 {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
   let world = worlds[world_index]
-  if not world.valid: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
-  result = world.cuboids.pos handle
+  if not world.valid: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
+  result = world.global_pos handle
 
 proc create_world(): cint {.cdecl, exportc, dynlib.} =
   let index = worlds.len
