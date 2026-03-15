@@ -8,3 +8,4 @@ description: Library for reducing packets for display entities
 
 commands:
   greedy_test:
+  cuboid:

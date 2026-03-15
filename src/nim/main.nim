@@ -1,4 +1,5 @@
 import meshing
+import sim
 
 proc NimMain() {.cdecl, importc.}
 proc NimDestroyGlobals() {.cdecl, importc.}

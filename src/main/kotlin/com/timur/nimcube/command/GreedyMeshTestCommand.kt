@@ -1,5 +1,6 @@
-package com.timur.nimcube
+package com.timur.nimcube.command
 
+import com.timur.nimcube.Nimcube
 import net.minecraft.core.BlockPos
 import org.bukkit.Bukkit
 import org.bukkit.command.Command
@@ -7,6 +8,7 @@ import org.bukkit.command.CommandExecutor
 import org.bukkit.command.CommandSender
 import org.bukkit.craftbukkit.CraftWorld
 import org.bukkit.entity.Player
+import java.lang.foreign.Arena
 import java.lang.foreign.ValueLayout
 import kotlin.time.measureTime
 
@@ -30,29 +32,31 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
             val serverLevel = (sender.world as CraftWorld).handle
             val chunk = serverLevel.getChunk(sender.x.toInt() shr 4, sender.z.toInt() shr 4)
 
-            val binarySegment = nim.arena.allocate(CHUNK_BINARY_DATA_SIZE.toLong())
+            Arena.ofConfined().use { arena ->
+                val binarySegment = arena.allocate(CHUNK_BINARY_DATA_SIZE.toLong())
 
-            val minX = chunk.pos.minBlockX
-            val minZ = chunk.pos.minBlockZ
+                val minX = chunk.pos.minBlockX
+                val minZ = chunk.pos.minBlockZ
 
-            val bp = BlockPos(0, 0, 0).mutable()
-            for (y in 0..<CHUNK_HEIGHT)
-                for (z in 0..<PHYSICS_CHUNK_WIDTH)
-                    for (x in 0..<PHYSICS_CHUNK_WIDTH) {
-                        bp.x = minX + x
-                        bp.y = MIN_HEIGHT + y
-                        bp.z = minZ + z
-                        val state = serverLevel.getBlockState(bp)
-                        if (!state.isCollisionShapeFullBlock(serverLevel, bp)) continue
-                        val index = y * PHYSICS_CHUNK_WIDTH * PHYSICS_CHUNK_WIDTH + z * PHYSICS_CHUNK_WIDTH + x
-                        val longIndex = index / 64
-                        val bitIndex = index - longIndex * 64
-                        var long = binarySegment.getAtIndex(ValueLayout.JAVA_LONG, longIndex.toLong())
-                        long = long or (1L shl bitIndex)
-                        binarySegment.setAtIndex(ValueLayout.JAVA_LONG, longIndex.toLong(), long)
-                    }
+                val bp = BlockPos(0, 0, 0).mutable()
+                for (y in 0..<CHUNK_HEIGHT)
+                    for (z in 0..<PHYSICS_CHUNK_WIDTH)
+                        for (x in 0..<PHYSICS_CHUNK_WIDTH) {
+                            bp.x = minX + x
+                            bp.y = MIN_HEIGHT + y
+                            bp.z = minZ + z
+                            val state = serverLevel.getBlockState(bp)
+                            if (!state.isCollisionShapeFullBlock(serverLevel, bp)) continue
+                            val index = y * PHYSICS_CHUNK_WIDTH * PHYSICS_CHUNK_WIDTH + z * PHYSICS_CHUNK_WIDTH + x
+                            val longIndex = index / 64
+                            val bitIndex = index - longIndex * 64
+                            var long = binarySegment.getAtIndex(ValueLayout.JAVA_LONG, longIndex.toLong())
+                            long = long or (1L shl bitIndex)
+                            binarySegment.setAtIndex(ValueLayout.JAVA_LONG, longIndex.toLong(), long)
+                        }
 
-            chunkMeshIndex = nim.greedyMesh(minX, MIN_HEIGHT, minZ, binarySegment)
+                chunkMeshIndex = nim.greedyMesh(minX, MIN_HEIGHT, minZ, binarySegment)
+            }
         }
 
         println("Total duration: $totalDuration")

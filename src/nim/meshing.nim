@@ -2,6 +2,8 @@ import std/bitops
 import std/times
 import std/monotimes
 
+import physics_math
+
 const
   chunk_width = 64
   chunk_height = 384
@@ -9,14 +11,6 @@ const
 type
   ## y-z-x order, lsb is first bit
   ChunkBinaryData = array[chunk_width * chunk_width * chunk_height div sizeof(uint64), uint64]
-  V3[T] = tuple[x, y, z: T]
-  F3 = V3[float32]
-  D3 = V3[float64]
-  I3 = V3[int32]
-  BB[T] = tuple[min, max: V3[T]]
-  FBB = BB[float32]
-  C_FBB {.bycopy.} = object
-    min_x, min_y, min_z, max_x, max_y, max_z: float32
   ChunkMesh = object
     origin: I3
     bbs: seq[FBB] ## relative to origin
