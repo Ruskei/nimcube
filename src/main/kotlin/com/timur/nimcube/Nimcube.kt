@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class Nimcube : JavaPlugin() {
     val nim = Nim(this)
-    val physicsWorlds = ConcurrentHashMap<World, Nim.WorldIndex>()
+    val nimWorlds = ConcurrentHashMap<World, NimWorld>()
 
     override fun onEnable() {
         GreedyMeshTestCommand(this).init()
@@ -17,5 +17,8 @@ class Nimcube : JavaPlugin() {
 
     override fun onDisable() {
         nim.deinit()
+
+        nimWorlds.values.forEach { it.deinit() }
+        nimWorlds.clear()
     }
 }

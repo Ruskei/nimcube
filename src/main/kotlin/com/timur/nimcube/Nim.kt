@@ -1,6 +1,8 @@
 package com.timur.nimcube
 
 import org.joml.Vector3d
+import org.joml.Vector3f
+import org.joml.Quaternionf
 import java.lang.foreign.*
 import java.lang.invoke.MethodHandle
 
@@ -13,6 +15,8 @@ class Nim(plugin: Nimcube) {
     @JvmInline
     value class WorldIndex(val index: Int)
 
+    val tickWorldHandle: MethodHandle
+
     val createCuboidHandle: MethodHandle
 
     data class BodyHandle(val slot: Int, val generation: Int)
@@ -23,11 +27,18 @@ class Nim(plugin: Nimcube) {
     )
 
     val getGlobalCuboidPos: MethodHandle
+    val getCuboidRotHandle: MethodHandle
 
     val C_D3 = MemoryLayout.structLayout(
         ValueLayout.JAVA_DOUBLE.withName("x"),
         ValueLayout.JAVA_DOUBLE.withName("y"),
         ValueLayout.JAVA_DOUBLE.withName("z"),
+    )
+    val C_QF = MemoryLayout.structLayout(
+        ValueLayout.JAVA_FLOAT.withName("x"),
+        ValueLayout.JAVA_FLOAT.withName("y"),
+        ValueLayout.JAVA_FLOAT.withName("z"),
+        ValueLayout.JAVA_FLOAT.withName("w"),
     )
 
     val greedyMeshHandle: MethodHandle
@@ -68,20 +79,39 @@ class Nim(plugin: Nimcube) {
 
         createWorldHandle = linker.downcallHandle(
             lookup.findOrThrow("create_world"),
-            FunctionDescriptor.of(ValueLayout.JAVA_INT)
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+            )
+        )
+        tickWorldHandle = linker.downcallHandle(
+            lookup.findOrThrow("tick_world"),
+            FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT)
         )
 
         createCuboidHandle = linker.downcallHandle(
             lookup.findOrThrow("c_create_cuboid"),
             FunctionDescriptor.of(
                 C_BodyHandle,
-                ValueLayout.JAVA_INT, C_D3
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE, ValueLayout.JAVA_DOUBLE,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
             )
         )
         getGlobalCuboidPos = linker.downcallHandle(
             lookup.findOrThrow("c_get_global_cuboid_pos"),
             FunctionDescriptor.of(
                 C_D3,
+                ValueLayout.JAVA_INT, C_BodyHandle
+            )
+        )
+        getCuboidRotHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_cuboid_rot"),
+            FunctionDescriptor.of(
+                C_QF,
                 ValueLayout.JAVA_INT, C_BodyHandle
             )
         )
@@ -111,31 +141,70 @@ class Nim(plugin: Nimcube) {
         libraryInit.invoke()
     }
 
-    fun createWorld(): WorldIndex = WorldIndex(createWorldHandle.invokeExact() as Int)
+    fun createWorld(dt: Float, acceleration: Vector3f): WorldIndex =
+        WorldIndex(createWorldHandle.invokeExact(dt, acceleration.x, acceleration.y, acceleration.z) as Int)
 
-    fun createCuboid(arena: Arena, worldIndex: WorldIndex, pos: Vector3d): BodyHandle {
-        val c_f3 = arena.allocate(C_D3)
-        c_f3.setAtIndex(ValueLayout.JAVA_DOUBLE, 0, pos.x)
-        c_f3.setAtIndex(ValueLayout.JAVA_DOUBLE, 1, pos.y)
-        c_f3.setAtIndex(ValueLayout.JAVA_DOUBLE, 2, pos.z)
+    fun tickWorld(worldIndex: WorldIndex) {
+        tickWorldHandle.invokeExact(worldIndex.index)
+    }
 
-        val segment = createCuboidHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, c_f3) as MemorySegment
+    fun createCuboid(
+        tempArena: Arena,
+        worldIndex: WorldIndex,
+        pos: Vector3d,
+        vel: Vector3f,
+        ω: Vector3f,
+        rot: Quaternionf,
+    ): BodyHandle {
+        val segment = createCuboidHandle.invokeExact(
+            tempArena as SegmentAllocator,
+            worldIndex.index,
+            pos.x,
+            pos.y,
+            pos.z,
+            vel.x,
+            vel.y,
+            vel.z,
+            ω.x,
+            ω.y,
+            ω.z,
+            rot.x,
+            rot.y,
+            rot.z,
+            rot.w,
+        ) as MemorySegment
         return BodyHandle(
             segment.get(ValueLayout.JAVA_INT, 0),
             segment.get(ValueLayout.JAVA_INT, 4),
         )
     }
 
-    fun getCuboidPos(arena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Vector3d {
-        val c_handle = arena.allocate(C_BodyHandle)
+    fun getCuboidPos(tempArena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Vector3d {
+        val c_handle = tempArena.allocate(C_BodyHandle)
         c_handle.setAtIndex(ValueLayout.JAVA_INT, 0, handle.slot)
         c_handle.setAtIndex(ValueLayout.JAVA_INT, 1, handle.generation)
 
-        val segment = getGlobalCuboidPos.invoke(arena as SegmentAllocator, worldIndex.index, c_handle) as MemorySegment
+        val segment =
+            getGlobalCuboidPos.invoke(tempArena as SegmentAllocator, worldIndex.index, c_handle) as MemorySegment
         return Vector3d(
             segment.get(ValueLayout.JAVA_DOUBLE, 0),
             segment.get(ValueLayout.JAVA_DOUBLE, 8),
             segment.get(ValueLayout.JAVA_DOUBLE, 16),
+        )
+    }
+
+    fun getCuboidRot(tempArena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Quaternionf {
+        val c_handle = tempArena.allocate(C_BodyHandle)
+        c_handle.setAtIndex(ValueLayout.JAVA_INT, 0, handle.slot)
+        c_handle.setAtIndex(ValueLayout.JAVA_INT, 1, handle.generation)
+
+        val segment =
+            getCuboidRotHandle.invoke(tempArena as SegmentAllocator, worldIndex.index, c_handle) as MemorySegment
+        return Quaternionf(
+            segment.get(ValueLayout.JAVA_FLOAT, 0),
+            segment.get(ValueLayout.JAVA_FLOAT, 4),
+            segment.get(ValueLayout.JAVA_FLOAT, 8),
+            segment.get(ValueLayout.JAVA_FLOAT, 12),
         )
     }
 

@@ -3,6 +3,9 @@ import physics_math
 type
   Cuboids = ref object
     local_pos: seq[F3]
+    vel: seq[F3]
+    ω: seq[F3]
+    rot: seq[QF]
     island_index: seq[int]
 
     dense_to_slot: seq[int]
@@ -22,6 +25,9 @@ type
     islands: seq[Island]
     cuboids: Cuboids
 
+    Δt: float32
+    acceleration: F3
+
 converter body_handle_to_c(handle: BodyHandle): C_BodyHandle =
   result.slot = handle.slot.int32
   result.generation = handle.generation.uint32
@@ -32,11 +38,13 @@ converter body_handle_from_c(handle: C_BodyHandle): BodyHandle =
 
 var worlds: seq[World]
 
-proc init_world(): World =
+proc init_world(Δt: float32, acceleration: F3): World =
   result = World(
     valid: true,
     islands: @[],
-    cuboids: Cuboids()
+    cuboids: Cuboids(),
+    Δt: Δt,
+    acceleration: acceleration
   )
 
 const slot_invalid = -1
@@ -48,7 +56,10 @@ proc is_valid(cuboids: Cuboids, handle: BodyHandle): bool =
 
 proc create_cuboid(
   world: World,
-  pos: D3
+  pos: D3,
+  vel: F3,
+  ω: F3,
+  rot: QF,
 ): BodyHandle =
   let cuboids = world.cuboids
   var slot: int
@@ -64,6 +75,9 @@ proc create_cuboid(
   let island_index = world.islands.len
   world.islands.add island
   cuboids.local_pos.add (0'f32, 0'f32, 0'f32)
+  cuboids.vel.add vel
+  cuboids.ω.add ω
+  cuboids.rot.add normalized(rot)
   cuboids.island_index.add island_index
   cuboids.dense_to_slot.add slot
   cuboids.slot_to_dense[slot] = dense
@@ -72,6 +86,9 @@ proc create_cuboid(
 
 proc local_pos(cuboids: Cuboids, handle: BodyHandle): F3 =
   result = cuboids.local_pos[cuboids.slot_to_dense[handle.slot]]
+
+proc rot(cuboids: Cuboids, handle: BodyHandle): QF =
+  result = cuboids.rot[cuboids.slot_to_dense[handle.slot]]
 
 proc island_index(cuboids: Cuboids, handle: BodyHandle): int =
   result = cuboids.island_index[cuboids.slot_to_dense[handle.slot]]
@@ -82,13 +99,22 @@ proc global_pos(world: World, handle: BodyHandle): D3 =
   result = island.pos + local_pos
 
 proc c_create_cuboid(
-  world_index: cint,
-  pos: C_D3,
+  world_index: cint;
+  pos_x, pos_y, pos_z: float64;
+  vel_x, vel_y, vel_z: float32;
+  ω_x, ω_y, ω_z: float32;
+  rot_x, rot_y, rot_z, rot_w: float32;
 ): C_BodyHandle {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return C_BodyHandle(slot: -1, generation: 0)
   let world = worlds[world_index]
   if not world.valid: return C_BodyHandle(slot: -1, generation: 0)
-  result = create_cuboid(world, pos)
+  result = create_cuboid(
+    world,
+    (pos_x, pos_y, pos_z),
+    (vel_x, vel_y, vel_z),
+    (ω_x, ω_y, ω_z),
+    (rot_x, rot_y, rot_z, rot_w),
+  )
 
 proc c_get_global_cuboid_pos(world_index: cint, handle: C_BodyHandle): C_D3 {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
@@ -96,7 +122,31 @@ proc c_get_global_cuboid_pos(world_index: cint, handle: C_BodyHandle): C_D3 {.cd
   if not world.valid: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
   result = world.global_pos handle
 
-proc create_world(): cint {.cdecl, exportc, dynlib.} =
+proc c_get_cuboid_rot(world_index: cint, handle: C_BodyHandle): C_QF {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
+  let world = worlds[world_index]
+  if not world.valid: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
+  result = world.cuboids.rot(handle)
+
+proc create_world(
+  Δt, acceleration_x, acceleration_y, acceleration_z: float32
+): cint {.cdecl, exportc, dynlib.} =
   let index = worlds.len
-  worlds.add init_world()
+  worlds.add init_world(Δt, (acceleration_x, acceleration_y, acceleration_z))
   result = index.cint
+
+proc tick_world(world_index: cint) {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return
+  let world = worlds[world_index]
+  if not world.valid: return
+  let cuboids = world.cuboids
+  let Δt = world.Δt
+  let acceleration = world.acceleration
+
+  for i in 0 ..< cuboids.local_pos.len:
+    cuboids.vel[i] += acceleration * Δt
+    cuboids.local_pos[i] += cuboids.vel[i] * Δt
+    let ω = cuboids.ω[i]
+    let spin = quat(ω, 0'f32)
+    let q = cuboids.rot[i]
+    cuboids.rot[i] = normalized(q + (0.5'f32 * Δt) * (spin * q))
