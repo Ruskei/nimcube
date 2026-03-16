@@ -1,13 +1,11 @@
 import physics_math
 import command_queue
 import cuboids
-import island
 import rw_lock
 
 type
   World = ref object
     valid*: bool
-    islands*: seq[Island]
     internal_data*: InternalData
     external_data*: ExternalData
 
@@ -21,7 +19,6 @@ var worlds*: seq[World]
 proc init_world*(Δt: float32, acceleration: F3): World =
   result = World(
     valid: true,
-    islands: @[],
     internal_data: InternalData(),
     external_data: init_external_data(),
     Δt: Δt,
@@ -36,7 +33,7 @@ proc tick_world*(world_index: int) =
 
   let data = world.internal_data
 
-  world.command_queue.process_command_queue(data, world.islands)
+  world.command_queue.process_command_queue(data)
 
   let Δt = world.Δt
   let acceleration = world.acceleration
@@ -49,7 +46,7 @@ proc tick_world*(world_index: int) =
     let q = data.rot[i]
     data.rot[i] = normalized(q + (0.5'f32 * Δt) * (spin * q))
 
-  data.update_external_data(world.external_data, world.islands)
+  data.update_external_data(world.external_data)
 
 proc global_pos*(world: World, handle: BodyHandle): D3 =
   with_read_lock(world.external_data.lock):

@@ -13,7 +13,7 @@ import org.joml.Vector3f
 
 class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
     fun init() {
-        Bukkit.getPluginCommand("cuboid")!!.setExecutor(this)
+        Bukkit.getPluginCommand("nim_cuboid")!!.setExecutor(this)
     }
 
     val nim = plugin.nim
@@ -32,8 +32,8 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                 NimWorld(
                     plugin,
                     world,
-                    0.01f,
-                    Vector3f(0f, -1f, 0f)
+                    plugin.Δt,
+                    plugin.acceleration,
                 ).also { it.init() }
             }
         val potentialBodyHandle = nim.createCuboid(

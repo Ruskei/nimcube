@@ -4,6 +4,7 @@ import packed_handle
 import physics_math
 import meshing
 import cuboids
+import rw_lock
 
 type
   C_D3 {.bycopy.} = object
@@ -12,6 +13,11 @@ type
     x, y, z: float32
   C_QF {.bycopy.} = object
     x, y, z, w: float32
+  C_BodyExternalData {.bycopy.} = object
+    pos_x, pos_y, pos_z: float64
+    rot_x, rot_y, rot_z, rot_w: float32
+    dimensions_x, dimensions_y, dimensions_z: float32
+    handle_slot, handle_generation: int32
   C_FBB {.bycopy.} = object
     min_x, min_y, min_z, max_x, max_y, max_z: float32
 
@@ -35,6 +41,14 @@ converter qf_to_c*(q: QF): C_QF =
   result.y = q.y
   result.z = q.z
   result.w = q.w
+
+proc invalid_body_external_data(): C_BodyExternalData =
+  result = C_BodyExternalData(
+    pos_x: 0'f64, pos_y: 0'f64, pos_z: 0'f64,
+    rot_x: 0'f32, rot_y: 0'f32, rot_z: 0'f32, rot_w: 1'f32,
+    dimensions_x: -1'f32, dimensions_y: -1'f32, dimensions_z: -1'f32,
+    handle_slot: -1'i32, handle_generation: 0'i32,
+  )
 
 proc c_create_world(
   Δt, acceleration_x, acceleration_y, acceleration_z: float32
@@ -75,12 +89,56 @@ proc c_create_cuboid(
 
   result = true
 
+proc c_remove_cuboid(world_index: cint, handle: PackedHandle): bool {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return false
+  let world = worlds[world_index]
+  if not world.valid: return false
+  if not world.external_data.is_valid handle: return false
+
+  world.command_queue.add Command(
+    kind: ck_remove,
+    handle: handle,
+  )
+
+  result = true
+
 proc c_is_valid(world_index: cint, handle: PackedHandle): bool {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return false
   let world = worlds[world_index]
   if not world.valid: return false
 
   result = world.external_data.is_valid handle
+
+proc c_num_bodies(world_index: cint): cint {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return -1
+  let world = worlds[world_index]
+  if not world.valid: return -1
+
+  with_read_lock(world.external_data.lock):
+    result = world.external_data.pos.len.cint
+
+proc c_get_body(world_index: cint, body_index: cint): C_BodyExternalData {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return invalid_body_external_data()
+  let world = worlds[world_index]
+  if not world.valid: return invalid_body_external_data()
+  if body_index < 0: return invalid_body_external_data()
+
+  with_read_lock(world.external_data.lock):
+    let dense = body_index.int
+    if dense >= world.external_data.pos.len:
+      return invalid_body_external_data()
+
+    let pos = world.external_data.pos[dense]
+    let rot = world.external_data.rot[dense]
+    let dimensions = world.external_data.dimensions[dense]
+    let slot = world.external_data.dense_to_slot[dense]
+    let generation = world.external_data.generation[slot]
+    result = C_BodyExternalData(
+      pos_x: pos.x, pos_y: pos.y, pos_z: pos.z,
+      rot_x: rot.x, rot_y: rot.y, rot_z: rot.z, rot_w: rot.w,
+      dimensions_x: dimensions.x, dimensions_y: dimensions.y, dimensions_z: dimensions.z,
+      handle_slot: slot.int32, handle_generation: generation.int32,
+    )
 
 proc c_get_global_cuboid_pos(world_index: cint, handle: PackedHandle): C_D3 {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)

@@ -18,7 +18,7 @@ class Nim(plugin: Nimcube) {
     val tickWorldHandle: MethodHandle
 
     val createCuboidHandle: MethodHandle
-//    val removeCuboidHandle: MethodHandle
+    val removeCuboidHandle: MethodHandle
 
     data class BodyHandle(val slot: Int, val generation: Int) {
         val asLong = (slot.toLong()) or (generation.toLong() shl 32)
@@ -50,6 +50,8 @@ class Nim(plugin: Nimcube) {
 
     val getGlobalCuboidPosHandle: MethodHandle
     val isCuboidValidHandle: MethodHandle
+    val numBodiesHandle: MethodHandle
+    val getBodyHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
 //    val getCuboidInverseMassHandle: MethodHandle
@@ -70,10 +72,46 @@ class Nim(plugin: Nimcube) {
         ValueLayout.JAVA_FLOAT.withName("z"),
         ValueLayout.JAVA_FLOAT.withName("w"),
     )
+    val C_BodyExternalData = MemoryLayout.structLayout(
+        ValueLayout.JAVA_DOUBLE.withName("posX"),
+        ValueLayout.JAVA_DOUBLE.withName("posY"),
+        ValueLayout.JAVA_DOUBLE.withName("posZ"),
+        ValueLayout.JAVA_FLOAT.withName("rotX"),
+        ValueLayout.JAVA_FLOAT.withName("rotY"),
+        ValueLayout.JAVA_FLOAT.withName("rotZ"),
+        ValueLayout.JAVA_FLOAT.withName("rotW"),
+        ValueLayout.JAVA_FLOAT.withName("dimensionsX"),
+        ValueLayout.JAVA_FLOAT.withName("dimensionsY"),
+        ValueLayout.JAVA_FLOAT.withName("dimensionsZ"),
+        ValueLayout.JAVA_INT.withName("handleSlot"),
+        ValueLayout.JAVA_INT.withName("handleGeneration"),
+        MemoryLayout.paddingLayout(4),
+    )
 
     val greedyMeshHandle: MethodHandle
     val numBBsHandle: MethodHandle
     val getBBHandle: MethodHandle
+
+    data class BodyExternalData(
+        val handle: BodyHandle,
+        val pos: Vector3d,
+        val rot: Quaternionf,
+        val dimensions: Vector3f,
+    ) {
+        fun isSentinel(): Boolean =
+            handle.slot == -1 &&
+            handle.generation == 0 &&
+            pos.x == 0.0 &&
+            pos.y == 0.0 &&
+            pos.z == 0.0 &&
+            rot.x == 0f &&
+            rot.y == 0f &&
+            rot.z == 0f &&
+            rot.w == 1f &&
+            dimensions.x == -1f &&
+            dimensions.y == -1f &&
+            dimensions.z == -1f
+    }
 
     data class FBB(
         val minX: Float,
@@ -134,6 +172,13 @@ class Nim(plugin: Nimcube) {
                 ValueLayout.JAVA_FLOAT,
             )
         )
+        removeCuboidHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_remove_cuboid"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_BOOLEAN,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+            )
+        )
         getGlobalCuboidPosHandle = linker.downcallHandle(
             lookup.findOrThrow("c_get_global_cuboid_pos"),
             FunctionDescriptor.of(
@@ -160,6 +205,20 @@ class Nim(plugin: Nimcube) {
             FunctionDescriptor.of(
                 ValueLayout.JAVA_BOOLEAN,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+            )
+        )
+        numBodiesHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_num_bodies"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+            )
+        )
+        getBodyHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_body"),
+            FunctionDescriptor.of(
+                C_BodyExternalData,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
 
@@ -227,16 +286,45 @@ class Nim(plugin: Nimcube) {
         return potentialBodyHandle
     }
 
-    //    fun removeCuboid(tempArena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Boolean {
-//        val c_handle = tempArena.allocate(C_BodyHandle)
-//        c_handle.setAtIndex(ValueLayout.JAVA_INT, 0, handle.slot)
-//        c_handle.setAtIndex(ValueLayout.JAVA_INT, 1, handle.generation)
-//
-//        return (removeCuboidHandle.invokeExact(worldIndex.index, c_handle) as Int) != 0
-//    }
-//
+    fun removeCuboid(worldIndex: WorldIndex, handle: BodyHandle) =
+        removeCuboidHandle.invokeExact(worldIndex.index, handle.asLong) as Boolean
+
     fun isCuboidValid(worldIndex: WorldIndex, handle: BodyHandle) =
         isCuboidValidHandle.invokeExact(worldIndex.index, handle.asLong) as Boolean
+
+    fun numBodies(worldIndex: WorldIndex): Int =
+        numBodiesHandle.invokeExact(worldIndex.index) as Int
+
+    fun getBody(tempArena: Arena, worldIndex: WorldIndex, bodyIndex: Int): BodyExternalData {
+        val segment =
+            getBodyHandle.invoke(
+                tempArena as SegmentAllocator,
+                worldIndex.index,
+                bodyIndex
+            ) as MemorySegment
+        return BodyExternalData(
+            BodyHandle(
+                segment.get(ValueLayout.JAVA_INT, 52),
+                segment.get(ValueLayout.JAVA_INT, 56),
+            ),
+            Vector3d(
+                segment.get(ValueLayout.JAVA_DOUBLE, 0),
+                segment.get(ValueLayout.JAVA_DOUBLE, 8),
+                segment.get(ValueLayout.JAVA_DOUBLE, 16),
+            ),
+            Quaternionf(
+                segment.get(ValueLayout.JAVA_FLOAT, 24),
+                segment.get(ValueLayout.JAVA_FLOAT, 28),
+                segment.get(ValueLayout.JAVA_FLOAT, 32),
+                segment.get(ValueLayout.JAVA_FLOAT, 36),
+            ),
+            Vector3f(
+                segment.get(ValueLayout.JAVA_FLOAT, 40),
+                segment.get(ValueLayout.JAVA_FLOAT, 44),
+                segment.get(ValueLayout.JAVA_FLOAT, 48),
+            ),
+        )
+    }
 
     fun getCuboidPos(tempArena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Vector3d {
         val segment =
@@ -280,17 +368,6 @@ class Nim(plugin: Nimcube) {
             segment.getAtIndex(ValueLayout.JAVA_FLOAT, 2),
         )
     }
-//
-//    fun getCuboidInverseMass(tempArena: Arena, worldIndex: WorldIndex, handle: BodyHandle): Float {
-//        val c_handle = tempArena.allocate(C_BodyHandle)
-//        c_handle.setAtIndex(ValueLayout.JAVA_INT, 0, handle.slot)
-//        c_handle.setAtIndex(ValueLayout.JAVA_INT, 1, handle.generation)
-//
-//        return getCuboidInverseMassHandle.invokeExact(
-//            worldIndex.index,
-//            c_handle,
-//        ) as Float
-//    }
 
     fun greedyMesh(originX: Int, originY: Int, originZ: Int, chunkBinaryData: MemorySegment): Int =
         greedyMeshHandle.invokeExact(originX, originY, originZ, chunkBinaryData) as Int

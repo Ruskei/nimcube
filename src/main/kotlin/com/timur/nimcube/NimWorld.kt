@@ -40,6 +40,13 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         }
         potentialBodyHandles += toRetry
 
+        var i = cuboids.size - 1
+        while (i >= 0) {
+            val cuboid = cuboids[i]
+            if (!nim.isCuboidValid(worldIndex, cuboid.handle)) cuboids.removeAt(i)
+            i--
+        }
+
         Arena.ofConfined().use { arena ->
             cuboids.forEach { it.update(arena) }
         }

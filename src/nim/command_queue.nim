@@ -1,7 +1,6 @@
 import std/atomics
 
 import cuboids
-import island
 import packed_handle
 import physics_math
 
@@ -40,7 +39,7 @@ proc get_next(node: var Node, queue: CommandQueue): bool =
   node = queue.head.exchange nil
   result = node != nil
 
-proc process_command_queue*(queue: CommandQueue, data: InternalData, islands: var seq[Island]) =
+proc process_command_queue*(queue: CommandQueue, data: InternalData) =
   var node = queue.head.exchange nil
 
   while node != nil:
@@ -49,21 +48,19 @@ proc process_command_queue*(queue: CommandQueue, data: InternalData, islands: va
 
     case command.kind
     of ck_add:
-      let island_index = islands.len
-      islands.add Island(pos: command.pos)
       let handle = create_cuboid(
         data = data,
+        initial_pos = command.pos,
         vel = command.vel,
         ω = command.ω,
         rot = command.rot,
         dimensions = command.dimensions,
         inverse_mass = command.inverse_mass,
-        island_index = island_index,
       )
       command.packed_handle.slot = handle.slot.int32
       command.packed_handle.generation = handle.generation.int32
     of ck_remove:
-      discard
+      discard data.remove_cuboid(command.handle)
 
     reset node.command
     dealloc node

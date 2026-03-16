@@ -14,7 +14,7 @@ import kotlin.time.measureTime
 
 class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
     fun init() {
-        Bukkit.getPluginCommand("greedy_test")!!.setExecutor(this)
+        Bukkit.getPluginCommand("nim_greedy_test")!!.setExecutor(this)
     }
 
     val nim = plugin.nim

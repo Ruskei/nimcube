@@ -14,7 +14,6 @@ class Cuboid(
     val nimWorld: NimWorld,
     val handle: Nim.BodyHandle,
 ) {
-    var valid = true
     val nim = nimWorld.nim
     val bukkitWorld = nimWorld.bukkitWorld
     val worldIndex = nimWorld.worldIndex
@@ -69,7 +68,6 @@ class Cuboid(
     }
 
     fun deinit() {
-        valid = false
         display?.remove()
         display = null
     }
