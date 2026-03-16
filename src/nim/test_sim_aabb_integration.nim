@@ -392,6 +392,28 @@ proc test_tick_world_negative_chunk_coordinates_for_a2s() =
   doAssert world.a2s_narrowphase_manifold_count() >= 1
   doAssert same_handle(world.get_a2s_narrowphase_manifold(0).body_a, handle)
 
+proc test_chunk_mesh_contact_solves_velocity() =
+  let world = fresh_world(dt = 1'f32 / 60'f32, acceleration = (0'f32, -9.8'f32, 0'f32))
+  let chunk_pos = chunk_position(0, 0)
+  var chunk_binary_data = make_chunk_binary_data(@[(1, 0, 1)])
+  var packed = PackedHandle(slot: -1, generation: 0)
+
+  doAssert world.add_chunk_mesh(chunk_pos, addr chunk_binary_data)
+  world.enqueue_add(
+    packed_handle = addr packed,
+    pos = (1.5'f64, -62.6'f64, 1.5'f64),
+    vel = (0'f32, -0.5'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (1'f32, 1'f32, 1'f32),
+  )
+
+  tick_world(0)
+
+  let handle: BodyHandle = packed
+  doAssert world.a2s_narrowphase_manifold_count() >= 1
+  doAssert same_handle(world.get_a2s_narrowphase_manifold(0).body_a, handle)
+  doAssert world.internal_data.vel[0].y > -0.663334'f32
+
 proc test_floor_contact_solves_velocity() =
   let world = fresh_world(dt = 1'f32 / 60'f32, acceleration = (0'f32, -9.8'f32, 0'f32))
   var floor_packed = PackedHandle(slot: -1, generation: 0)
@@ -478,6 +500,7 @@ when is_main_module:
   test_tick_world_environment_broadphase_uses_chunk_local_tree_and_world_space_hit()
   test_tick_world_no_a2s_when_no_chunk_mesh_overlaps()
   test_tick_world_negative_chunk_coordinates_for_a2s()
+  test_chunk_mesh_contact_solves_velocity()
   test_floor_contact_solves_velocity()
   test_head_on_collision_reduces_relative_velocity()
   test_rotate_vector()

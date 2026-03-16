@@ -1,3 +1,5 @@
 .gradle
 .idea
 build
+src/nim/test_*
+!src/nim/test_*.nim

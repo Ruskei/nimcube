@@ -9,17 +9,20 @@ import org.joml.Vector3f
 import java.lang.foreign.Arena
 import java.util.concurrent.ConcurrentLinkedDeque
 import kotlin.math.round
+import kotlin.time.measureTime
 
 class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val acceleration: Vector3f) {
     private val a2aContactPointDust = Particle.DustOptions(Color.PURPLE, 0.4f)
     private val a2aContactNormalDust = Particle.DustOptions(Color.AQUA, 0.4f)
     private val a2sContactPointDust = Particle.DustOptions(Color.BLACK, 0.4f)
     private val a2sContactNormalDust = Particle.DustOptions(Color.LIME, 0.4f)
+    private val physicsSubstepsPerTick = round(0.05 / dt).toInt()
 
     val nim = plugin.nim
     val worldIndex = nim.createWorld(dt, acceleration)
     var physicsThread: BukkitTask? = null
     var bukkitThread: BukkitTask? = null
+    var physicsFrozen = false
 
     val potentialBodyHandles = ConcurrentLinkedDeque<Nim.PotentialBodyHandle>()
     val cuboids = mutableListOf<Cuboid>()
@@ -30,10 +33,34 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     }
 
     fun physicsTick() {
-        repeat(round(0.05 / dt).toInt()) {
-            nim.tickWorld(worldIndex)
+        if (!physicsFrozen) {
+            advancePhysicsSubsteps(physicsSubstepsPerTick)
         }
 
+//        renderPhysicsDebug()
+    }
+
+    fun togglePhysicsFrozen(): Boolean {
+        physicsFrozen = !physicsFrozen
+        return physicsFrozen
+    }
+
+    fun stepPhysicsSubsteps(steps: Int) {
+        require(steps > 0) { "steps must be positive" }
+        advancePhysicsSubsteps(steps)
+    }
+
+    private fun advancePhysicsSubsteps(steps: Int) {
+        val physicsFrameDuration = measureTime {
+            repeat(steps) {
+                nim.tickWorld(worldIndex)
+            }
+        }
+
+        println("physicsFrameDuration=$physicsFrameDuration")
+    }
+
+    private fun renderPhysicsDebug() {
         Arena.ofConfined().use { arena ->
             val nodeCount = nim.numAabbTreeNodes(worldIndex)
             for (i in 0 until nodeCount) {
@@ -60,7 +87,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
                 showCollisionContacts(
                     collision.contactCount,
                     collision.contactPoints,
-                    a2aContactPointDust,
+                    a2sContactPointDust,
                     a2sContactNormalDust
                 )
                 collisionIndex++

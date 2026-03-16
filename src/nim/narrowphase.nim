@@ -648,6 +648,11 @@ proc a2a_build_face_manifold(
     manifold.contact_points,
     manifold.contact_count,
   )
+  if not reference_is_a:
+    for idx in 0 ..< manifold.contact_count.int:
+      manifold.contact_points[idx].position +=
+        manifold.contact_points[idx].normal * manifold.contact_points[idx].penetration_depth
+      manifold.contact_points[idx].normal = -manifold.contact_points[idx].normal
   result = manifold.contact_count > 0
 
 proc build_support_edge(body: BodyObbView, edge_axis_idx: int, support_direction: F3): SupportEdge =
@@ -882,6 +887,7 @@ proc a2s_build_face_manifold(
     incident_face.axis_idx,
     incident_face.face_sign,
   )
+
   write_reduced_contacts(
     unique_candidates,
     unique_count,
@@ -889,6 +895,11 @@ proc a2s_build_face_manifold(
     manifold.contact_points,
     manifold.contact_count,
   )
+  if not reference_is_a:
+    for idx in 0 ..< manifold.contact_count.int:
+      manifold.contact_points[idx].position +=
+        manifold.contact_points[idx].normal * manifold.contact_points[idx].penetration_depth
+      manifold.contact_points[idx].normal = -manifold.contact_points[idx].normal
   result = manifold.contact_count > 0
 
 proc a2s_edge_manifold_id(

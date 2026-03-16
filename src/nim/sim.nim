@@ -1,6 +1,8 @@
 import std/hashes
 import std/math
 import std/tables
+import std/times
+import std/monotimes
 
 import physics_math
 import command_queue
@@ -81,6 +83,8 @@ proc init_world*(Δt: float32, acceleration: F3): World =
   )
 
 proc tick_world*(world_index: int) =
+  let start = get_mono_time()
+
   if world_index >= worlds.len: return
   var world = worlds[world_index]
   if not world.valid: return
@@ -141,18 +145,23 @@ proc tick_world*(world_index: int) =
             )
             world.narrowphase_pool.add_a2s_broadphase_result((body: handle, static_bb: world_bb))
 
+  let broadphase = get_mono_time()
+
   world.narrowphase_pool.dispatch_narrowphase_and_wait()
-  world.a2a_contact_manifolds.setLen(0)
-  world.a2s_contact_manifolds.setLen(0)
-  for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
-    let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
-    for output_idx in 0 ..< worker_count:
-      let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
-      case result.kind
-      of nrk_a2a:
-        world.a2a_contact_manifolds.add result.a2a
-      of nrk_a2s:
-        world.a2s_contact_manifolds.add result.a2s
+
+  let narrowphase = get_mono_time()
+
+  # world.a2a_contact_manifolds.setLen(0)
+  # world.a2s_contact_manifolds.setLen(0)
+  # for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
+  #   let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
+  #   for output_idx in 0 ..< worker_count:
+  #     let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
+  #     case result.kind
+  #     of nrk_a2a:
+  #       world.a2a_contact_manifolds.add result.a2a
+  #     of nrk_a2s:
+  #       world.a2s_contact_manifolds.add result.a2s
 
   let Δt = world.Δt
   for i in 0 ..< data.local_pos.len:
@@ -161,7 +170,11 @@ proc tick_world*(world_index: int) =
   world.velocity_constraints.precompute_velocity_constraints(data, world.narrowphase_pool, Δt)
   world.velocity_constraints.solve_velocity_constraints(data, velocity_solve_iterations, velocity_solve_sor)
 
+  let constraint_solving = get_mono_time()
+
+  # echo "integrating"
   for i in 0 ..< data.local_pos.len:
+    # echo "  vel=", data.vel[i]
     let displacement = data.vel[i] * Δt
     data.local_pos[i] += displacement
     let ω = data.ω[i]
@@ -171,7 +184,17 @@ proc tick_world*(world_index: int) =
     data.update_body_collision_cache(i)
     data.update_cuboid_aabb(world.aabb_tree, i, displacement)
 
+  let integrating = get_mono_time()
+
   data.update_external_data(world.external_data)
+
+  let finish = get_mono_time()
+
+  # echo "| total=", in_microseconds(finish - start), "μs"
+  # echo "| broadphase=", in_microseconds(broadphase - start), "μs"
+  # echo "| narrowphase=", in_microseconds(narrowphase - broadphase), "μs"
+  # echo "| constraint_solving=", in_microseconds(constraint_solving - narrowphase), "μs"
+  # echo "| integrating=", in_microseconds(integrating - constraint_solving), "μs"
 
 proc deinit_world*(world: World) =
   if world.is_nil or not world.valid:

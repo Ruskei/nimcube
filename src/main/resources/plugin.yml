@@ -11,3 +11,5 @@ commands:
   nim_cuboid:
   nim_grid_cuboids:
   nim_clear:
+  nim_freeze:
+  nim_step:

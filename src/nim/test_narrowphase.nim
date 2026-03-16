@@ -1,3 +1,5 @@
+import std/math
+
 import dynamic_aabb_tree
 import command_queue
 import narrowphase
@@ -38,6 +40,10 @@ proc make_bb(
 ): FBB =
   result.min = (min_x, min_y, min_z)
   result.max = (max_x, max_y, max_z)
+
+proc quat_z(angle_deg: float32): QF =
+  let half_angle = angle_deg * PI.float32 / 360'f32
+  normalized((0'f32, 0'f32, sin(half_angle), cos(half_angle)))
 
 proc make_a2s_hit(
   idx: int,
@@ -104,6 +110,7 @@ proc add_body(
   dimensions: F3,
   vel: F3 = (0'f32, 0'f32, 0'f32),
   ω: F3 = (0'f32, 0'f32, 0'f32),
+  rot: QF = quat_identity(float32),
   inverse_mass = 1'f32,
 ): BodyHandle =
   fixture.data.create_cuboid(
@@ -111,7 +118,7 @@ proc add_body(
     initial_pos = pos,
     vel = vel,
     ω = ω,
-    rot = quat_identity(float32),
+    rot = rot,
     dimensions = dimensions,
     inverse_mass = inverse_mass,
   )
@@ -262,6 +269,38 @@ proc test_a2s_face_manifold_generation() =
     doAssert approx_equal(contact.normal.y, 0'f32)
     doAssert approx_equal(contact.normal.z, 0'f32)
 
+proc test_a2s_face_manifold_is_canonical_when_static_is_reference() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (-0.2'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+    rot = quat_z(10'f32),
+  )
+  fixture.sync_body_inputs()
+
+  fixture.pool.clear_narrowphase_inputs()
+  fixture.pool.add_a2s_broadphase_result(
+    (body: handle, static_bb: make_bb(0.5'f32, -1'f32, -1'f32, 2.5'f32, 1'f32, 1'f32))
+  )
+  fixture.pool.dispatch_narrowphase_and_wait()
+
+  let results = fixture.pool.collect_results()
+  doAssert results.len == 1
+  doAssert results[0].kind == nrk_a2s
+  doAssert results[0].a2s.contact_count > 0
+
+  for idx in 0 ..< results[0].a2s.contact_count.int:
+    let contact = results[0].a2s.contact_points[idx]
+    let dynamic_surface_point = contact.position + contact.normal * contact.penetration_depth
+    doAssert approx_equal(contact.position.x, 0.5'f32)
+    doAssert approx_equal(contact.normal.x, 1'f32)
+    doAssert approx_equal(contact.normal.y, 0'f32)
+    doAssert approx_equal(contact.normal.z, 0'f32)
+    doAssert dynamic_surface_point.x > contact.position.x
+    doAssert dynamic_surface_point.x <= 1.0001'f32
+
 proc test_a2s_manifold_id_is_stable() =
   var fixture = init_pool_fixture()
   defer: fixture.deinit()
@@ -318,6 +357,42 @@ proc test_mixed_a2a_and_a2s_outputs() =
 
   doAssert a2a_count == 1
   doAssert a2s_count == 1
+
+proc test_a2a_face_manifold_is_canonical_when_body_b_is_reference() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle_a = fixture.add_body(
+    pos = (-0.2'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+    rot = quat_z(10'f32),
+  )
+  let handle_b = fixture.add_body(
+    pos = (1.5'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  fixture.sync_body_inputs()
+
+  fixture.pool.clear_narrowphase_inputs()
+  fixture.pool.add_a2a_broadphase_result((handle_a, handle_b))
+  fixture.pool.dispatch_narrowphase_and_wait()
+
+  let results = fixture.pool.collect_results()
+  doAssert results.len == 1
+  doAssert results[0].kind == nrk_a2a
+  doAssert same_handle(results[0].a2a.body_a, handle_a)
+  doAssert same_handle(results[0].a2a.body_b, handle_b)
+  doAssert results[0].a2a.contact_count > 0
+
+  for idx in 0 ..< results[0].a2a.contact_count.int:
+    let contact = results[0].a2a.contact_points[idx]
+    let point_a = contact.position + contact.normal * contact.penetration_depth
+    doAssert approx_equal(contact.position.x, 0.5'f32)
+    doAssert approx_equal(contact.normal.x, 1'f32)
+    doAssert approx_equal(contact.normal.y, 0'f32)
+    doAssert approx_equal(contact.normal.z, 0'f32)
+    doAssert point_a.x > contact.position.x
+    doAssert point_a.x <= 1.0001'f32
 
 proc test_face_manifold_generation() =
   let world = fresh_world()
@@ -458,8 +533,10 @@ when is_main_module:
   test_repeated_dispatch_reuses_capacity()
   test_pool_shutdown()
   test_a2s_face_manifold_generation()
+  test_a2s_face_manifold_is_canonical_when_static_is_reference()
   test_a2s_manifold_id_is_stable()
   test_mixed_a2a_and_a2s_outputs()
+  test_a2a_face_manifold_is_canonical_when_body_b_is_reference()
   test_face_manifold_generation()
   test_face_manifold_is_order_invariant()
   deinit_worlds()
