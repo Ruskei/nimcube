@@ -20,6 +20,11 @@ proc `+`*[T](a: V3[T], b: V3[T]): V3[T] =
   result.y = a.y + b.y
   result.z = a.z + b.z
 
+proc `-`*[T](a: V3[T], b: V3[T]): V3[T] =
+  result.x = a.x - b.x
+  result.y = a.y - b.y
+  result.z = a.z - b.z
+
 proc `+=`*[T](a: var V3[T], b: V3[T]) =
   a.x += b.x
   a.y += b.y
@@ -72,6 +77,12 @@ proc quat_identity*[T](t: typedesc[T]): Q[T] =
   result.z = T(0)
   result.w = T(1)
 
+proc conjugate*[T](q: Q[T]): Q[T] =
+  result.x = -q.x
+  result.y = -q.y
+  result.z = -q.z
+  result.w = q.w
+
 proc dot*[T: SomeFloat](a: Q[T], b: Q[T]): T =
   a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
 
@@ -84,3 +95,10 @@ proc normalized*[T: SomeFloat](q: Q[T]): Q[T] =
     return quat_identity(T)
   let invNorm = T(1) / sqrt(n2)
   q * invNorm
+
+proc rotate_vector*[T: SomeFloat](q: Q[T], v: V3[T]): V3[T] =
+  let pure_v = quat(v, T(0))
+  let rotated = q * pure_v * conjugate(q)
+  result.x = rotated.x
+  result.y = rotated.y
+  result.z = rotated.z

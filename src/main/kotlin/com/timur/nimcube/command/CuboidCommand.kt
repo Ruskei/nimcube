@@ -43,7 +43,7 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                 sender.location.y,
                 sender.location.z,
             ),
-            Vector3f(2f, 0f, 0f),
+            Vector3f(),
             Vector3f(1f, 2f, 0f),
             Quaternionf(),
             Vector3f(2f, 1f, 0.5f),

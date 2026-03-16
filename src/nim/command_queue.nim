@@ -1,6 +1,7 @@
 import std/atomics
 
 import cuboids
+import dynamic_aabb_tree
 import packed_handle
 import physics_math
 
@@ -39,7 +40,7 @@ proc get_next(node: var Node, queue: CommandQueue): bool =
   node = queue.head.exchange nil
   result = node != nil
 
-proc process_command_queue*(queue: CommandQueue, data: InternalData) =
+proc process_command_queue*(queue: CommandQueue, data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle]) =
   var node = queue.head.exchange nil
 
   while node != nil:
@@ -50,6 +51,7 @@ proc process_command_queue*(queue: CommandQueue, data: InternalData) =
     of ck_add:
       let handle = create_cuboid(
         data = data,
+        aabb_tree = aabb_tree,
         initial_pos = command.pos,
         vel = command.vel,
         ω = command.ω,
@@ -60,7 +62,7 @@ proc process_command_queue*(queue: CommandQueue, data: InternalData) =
       command.packed_handle.slot = handle.slot.int32
       command.packed_handle.generation = handle.generation.int32
     of ck_remove:
-      discard data.remove_cuboid(command.handle)
+      discard data.remove_cuboid(aabb_tree, command.handle)
 
     reset node.command
     dealloc node

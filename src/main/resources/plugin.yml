@@ -9,4 +9,5 @@ description: Library for reducing packets for display entities
 commands:
   nim_greedy_test:
   nim_cuboid:
+  nim_grid_cuboids:
   nim_clear:

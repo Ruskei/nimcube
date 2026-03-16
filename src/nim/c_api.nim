@@ -50,6 +50,12 @@ proc invalid_body_external_data(): C_BodyExternalData =
     handle_slot: -1'i32, handle_generation: 0'i32,
   )
 
+proc invalid_fbb(): C_FBB =
+  result = C_FBB(
+    min_x: 0'f32, min_y: 0'f32, min_z: 0'f32,
+    max_x: -1'f32, max_y: -1'f32, max_z: -1'f32,
+  )
+
 proc c_create_world(
   Δt, acceleration_x, acceleration_y, acceleration_z: float32
 ): cint {.cdecl, exportc, dynlib.} =
@@ -157,6 +163,26 @@ proc c_get_global_cuboid_dimensions(world_index: cint, handle: PackedHandle): C_
   let world = worlds[world_index]
   if not world.valid: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
   result = world.global_dimensions handle
+
+proc c_num_aabb_tree_nodes(world_index: cint): cint {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return -1
+  let world = worlds[world_index]
+  if not world.valid: return -1
+  result = world.num_aabb_tree_nodes().cint
+
+proc c_get_aabb_tree_node(world_index: cint, node_index: cint): C_FBB {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return invalid_fbb()
+  let world = worlds[world_index]
+  if not world.valid: return invalid_fbb()
+  if node_index < 0: return invalid_fbb()
+
+  let bb = world.get_aabb_tree_node(node_index.int)
+  result.min_x = bb.min.x
+  result.min_y = bb.min.y
+  result.min_z = bb.min.z
+  result.max_x = bb.max.x
+  result.max_y = bb.max.y
+  result.max_z = bb.max.z
 
 proc c_greedy_mesh*(
   origin_x, origin_y, origin_z: cint;

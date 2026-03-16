@@ -18,7 +18,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     val cuboids = mutableListOf<Cuboid>()
 
     fun init() {
-        physicsThread = Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, Runnable { physicsTick() }, 1, 1)
+        physicsThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { physicsTick() }, 1, 1)
         bukkitThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { bukkitTick() }, 1, 1)
     }
 
@@ -26,6 +26,13 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         repeat(round(0.05 / dt).toInt()) {
             nim.tickWorld(worldIndex)
         }
+
+//        Arena.ofConfined().use { arena ->
+//            val nodeCount = nim.numAabbTreeNodes(worldIndex)
+//            for (i in 0 until nodeCount) {
+//                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
+//            }
+//        }
     }
 
     fun bukkitTick() {
@@ -43,7 +50,10 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         var i = cuboids.size - 1
         while (i >= 0) {
             val cuboid = cuboids[i]
-            if (!nim.isCuboidValid(worldIndex, cuboid.handle)) cuboids.removeAt(i)
+            if (!nim.isCuboidValid(worldIndex, cuboid.handle)) {
+                cuboid.deinit()
+                cuboids.removeAt(i)
+            }
             i--
         }
 

@@ -136,6 +136,23 @@ proc test_update_keeps_stable_index() =
   doAssert collect_query(tree, make_bb(-1'f32, -1'f32, -1'f32, 2'f32, 2'f32, 2'f32)).len == 0
   doAssert collect_query(tree, make_bb(2'f32, 2'f32, 2'f32, 6'f32, 6'f32, 6'f32)) == @[leaf_idx]
 
+proc test_update_ignores_displacement_while_tight_aabb_still_fits() =
+  var tree = init_dynamic_aabb_tree[int](initial_capacity = 1, fat_margin = 0.5'f32)
+
+  let leaf_idx = tree.insert(make_bb(0'f32, 0'f32, 0'f32, 1'f32, 1'f32, 1'f32), 7)
+  let initial_box = tree.get_aabb(leaf_idx)
+  tree.validate()
+
+  doAssert not tree.update(
+    leaf_idx,
+    make_bb(0.1'f32, 0.1'f32, 0.1'f32, 0.9'f32, 0.9'f32, 0.9'f32),
+    displacement = (1'f32, 0'f32, 0'f32),
+  )
+  tree.validate()
+
+  let updated_box = tree.get_aabb(leaf_idx)
+  doAssert initial_box == updated_box
+
 proc test_potential_pairs_match_brute_force() =
   var tree = init_dynamic_aabb_tree[int](initial_capacity = 2, fat_margin = 0'f32)
 
@@ -151,6 +168,18 @@ proc test_potential_pairs_match_brute_force() =
   doAssert actual_pairs == expected_pairs
   doAssert actual_pairs.len == 2
 
+proc test_compute_depth() =
+  var tree = init_dynamic_aabb_tree[int](initial_capacity = 1, fat_margin = 0'f32)
+
+  doAssert tree.compute_depth() == 0
+
+  discard tree.insert(make_bb(0'f32, 0'f32, 0'f32, 1'f32, 1'f32, 1'f32), 1)
+  doAssert tree.compute_depth() == 1
+
+  discard tree.insert(make_bb(2'f32, 2'f32, 2'f32, 3'f32, 3'f32, 3'f32), 2)
+  discard tree.insert(make_bb(4'f32, 4'f32, 4'f32, 5'f32, 5'f32, 5'f32), 3)
+  doAssert tree.compute_depth() >= 2
+
 proc test_mixed_mutations_and_clear() =
   var tree = init_dynamic_aabb_tree[payload](initial_capacity = 0, fat_margin = 0.25'f32)
 
@@ -165,7 +194,7 @@ proc test_mixed_mutations_and_clear() =
 
   doAssert tree.update(
     leaf_b,
-    make_bb(2.2'f32, 2'f32, 2'f32, 3.2'f32, 3'f32, 3'f32),
+    make_bb(1.4'f32, 2'f32, 2'f32, 2.4'f32, 3'f32, 3'f32),
     displacement = (-0.5'f32, 0'f32, 0'f32),
   )
   tree.validate()
@@ -193,6 +222,8 @@ when is_main_module:
   test_insert_query_and_grow()
   test_remove_reuses_leaf_slot()
   test_update_keeps_stable_index()
+  test_update_ignores_displacement_while_tight_aabb_still_fits()
   test_potential_pairs_match_brute_force()
+  test_compute_depth()
   test_mixed_mutations_and_clear()
   echo "dynamic_aabb_tree tests passed"

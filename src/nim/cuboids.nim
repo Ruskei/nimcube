@@ -6,6 +6,7 @@
 import physics_math
 import rw_lock
 import packed_handle
+import dynamic_aabb_tree
 
 type
   InternalData* = ref object
@@ -21,6 +22,7 @@ type
     slot_to_dense: seq[int]
     generation: seq[uint]
     free_slots: seq[int]
+    aabb_node_idx: seq[NodeIndex]
   ExternalData* = ref object
     pos*: seq[D3]
     rot*: seq[QF]
@@ -69,8 +71,41 @@ proc is_valid*(data: ExternalData, handle: BodyHandle): bool =
       data.slot_to_dense[handle.slot] != slot_invalid
   result = is_valid
 
+proc body_aabb(data: InternalData, dense_idx: int): FBB =
+  let center = (
+    x: (data.initial_pos[dense_idx].x + data.local_pos[dense_idx].x.float64).float32,
+    y: (data.initial_pos[dense_idx].y + data.local_pos[dense_idx].y.float64).float32,
+    z: (data.initial_pos[dense_idx].z + data.local_pos[dense_idx].z.float64).float32,
+  )
+  let half_extents = data.dimensions[dense_idx] * 0.5'f32
+  let q = data.rot[dense_idx]
+  let local_corners = [
+    ( half_extents.x,  half_extents.y,  half_extents.z),
+    ( half_extents.x,  half_extents.y, -half_extents.z),
+    ( half_extents.x, -half_extents.y,  half_extents.z),
+    ( half_extents.x, -half_extents.y, -half_extents.z),
+    (-half_extents.x,  half_extents.y,  half_extents.z),
+    (-half_extents.x,  half_extents.y, -half_extents.z),
+    (-half_extents.x, -half_extents.y,  half_extents.z),
+    (-half_extents.x, -half_extents.y, -half_extents.z),
+  ]
+
+  let first_corner = center + rotate_vector(q, local_corners[0])
+  result.min = first_corner
+  result.max = first_corner
+
+  for i in 1 ..< local_corners.len:
+    let corner = center + rotate_vector(q, local_corners[i])
+    if corner.x < result.min.x: result.min.x = corner.x
+    if corner.y < result.min.y: result.min.y = corner.y
+    if corner.z < result.min.z: result.min.z = corner.z
+    if corner.x > result.max.x: result.max.x = corner.x
+    if corner.y > result.max.y: result.max.y = corner.y
+    if corner.z > result.max.z: result.max.z = corner.z
+
 proc create_cuboid*(
   data: InternalData,
+  aabb_tree: DynamicAabbTree[BodyHandle],
   initial_pos: D3,
   vel: F3,
   ω: F3,
@@ -95,17 +130,23 @@ proc create_cuboid*(
   data.dimensions.add dimensions
   data.inverse_mass.add inverse_mass
   data.dense_to_slot.add slot
+  data.aabb_node_idx.add invalid_node_index
   data.slot_to_dense[slot] = dense
 
   result = BodyHandle(slot: slot, generation: data.generation[slot])
+  data.aabb_node_idx[dense] = aabb_tree.insert(data.body_aabb(dense), result)
 
-proc remove_cuboid*(data: InternalData, handle: BodyHandle): bool =
+proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], handle: BodyHandle): bool =
   if not data.is_valid(handle):
     return false
 
   let slot = handle.slot
   let dense = data.slot_to_dense[slot]
   let last_dense = data.local_pos.len - 1
+  let node_idx = data.aabb_node_idx[dense]
+
+  if node_idx != invalid_node_index:
+    discard aabb_tree.remove(node_idx)
 
   if dense != last_dense:
     let moved_slot = data.dense_to_slot[last_dense]
@@ -116,6 +157,7 @@ proc remove_cuboid*(data: InternalData, handle: BodyHandle): bool =
     data.rot[dense] = data.rot[last_dense]
     data.dimensions[dense] = data.dimensions[last_dense]
     data.inverse_mass[dense] = data.inverse_mass[last_dense]
+    data.aabb_node_idx[dense] = data.aabb_node_idx[last_dense]
     data.dense_to_slot[dense] = moved_slot
     data.slot_to_dense[moved_slot] = dense
 
@@ -127,6 +169,7 @@ proc remove_cuboid*(data: InternalData, handle: BodyHandle): bool =
   data.dimensions.setLen last_dense
   data.inverse_mass.setLen last_dense
   data.dense_to_slot.setLen last_dense
+  data.aabb_node_idx.setLen last_dense
 
   data.slot_to_dense[slot] = slot_invalid
   inc data.generation[slot]
@@ -155,6 +198,12 @@ proc inverse_inertia*(dimensions: F3, inverse_mass: float32): F3 =
   let iy = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.z * dimensions.z)
   let iz = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.y * dimensions.y)
   result = (1'f32 / ix, 1'f32 / iy, 1'f32 / iz)
+
+proc update_cuboid_aabb*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], dense_idx: int, displacement: F3) =
+  let node_idx = data.aabb_node_idx[dense_idx]
+  if node_idx == invalid_node_index:
+    return
+  discard aabb_tree.update(node_idx, data.body_aabb(dense_idx), displacement)
 
 proc update_external_data*(internal_data: InternalData, external_data: var ExternalData) =
   with_write_lock(external_data.lock):

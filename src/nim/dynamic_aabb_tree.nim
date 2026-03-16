@@ -477,13 +477,14 @@ proc update*[T](
   if not tree.is_valid_leaf(leaf_idx):
     return false
 
+  let tight_box = init_aabb(min_x, min_y, min_z, max_x, max_y, max_z)
   let next_box = fatten_aabb(
-    init_aabb(min_x, min_y, min_z, max_x, max_y, max_z),
+    tight_box,
     tree.fat_margin,
     displacement,
   )
 
-  if contains(tree.node_aabb(leaf_idx), next_box):
+  if contains(tree.node_aabb(leaf_idx), tight_box):
     return false
 
   let refit_idx = tree.remove_leaf_topology(leaf_idx, free_leaf = false)
@@ -579,6 +580,21 @@ iterator potential_pairs*[T](tree: DynamicAabbTree[T]): tuple[a, b: NodeIndex] =
         stack.add (a_node.child_1_idx, b_node.child_2_idx)
         stack.add (a_node.child_2_idx, b_node.child_1_idx)
         stack.add (a_node.child_2_idx, b_node.child_2_idx)
+
+proc compute_depth*[T](tree: DynamicAabbTree[T]): int =
+  if tree.root_idx == invalid_node_index:
+    return 0
+
+  var stack = @[(tree.root_idx, 1)]
+  while stack.len > 0:
+    let (idx, depth) = stack.pop()
+    if depth > result:
+      result = depth
+
+    let node = tree.nodes[idx]
+    if not node.is_leaf:
+      stack.add (node.child_1_idx, depth + 1)
+      stack.add (node.child_2_idx, depth + 1)
 
 proc validate*[T](tree: DynamicAabbTree[T]) =
   var free_seen = newSeq[bool](tree.nodes.len)

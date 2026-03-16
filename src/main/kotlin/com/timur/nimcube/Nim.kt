@@ -52,6 +52,8 @@ class Nim(plugin: Nimcube) {
     val isCuboidValidHandle: MethodHandle
     val numBodiesHandle: MethodHandle
     val getBodyHandle: MethodHandle
+    val numAabbTreeNodesHandle: MethodHandle
+    val getAabbTreeNodeHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
 //    val getCuboidInverseMassHandle: MethodHandle
@@ -221,6 +223,20 @@ class Nim(plugin: Nimcube) {
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
+        numAabbTreeNodesHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_num_aabb_tree_nodes"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+            )
+        )
+        getAabbTreeNodeHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_aabb_tree_node"),
+            FunctionDescriptor.of(
+                C_FBB,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+            )
+        )
 
         greedyMeshHandle = linker.downcallHandle(
             lookup.findOrThrow("c_greedy_mesh"),
@@ -323,6 +339,21 @@ class Nim(plugin: Nimcube) {
                 segment.get(ValueLayout.JAVA_FLOAT, 44),
                 segment.get(ValueLayout.JAVA_FLOAT, 48),
             ),
+        )
+    }
+
+    fun numAabbTreeNodes(worldIndex: WorldIndex): Int =
+        numAabbTreeNodesHandle.invokeExact(worldIndex.index) as Int
+
+    fun getAabbTreeNode(arena: Arena, worldIndex: WorldIndex, nodeIndex: Int): FBB {
+        val segment = getAabbTreeNodeHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, nodeIndex) as MemorySegment
+        return FBB(
+            segment.get(ValueLayout.JAVA_FLOAT, 0),
+            segment.get(ValueLayout.JAVA_FLOAT, 4),
+            segment.get(ValueLayout.JAVA_FLOAT, 8),
+            segment.get(ValueLayout.JAVA_FLOAT, 12),
+            segment.get(ValueLayout.JAVA_FLOAT, 16),
+            segment.get(ValueLayout.JAVA_FLOAT, 20),
         )
     }
 
