@@ -20,6 +20,7 @@ type
     cached_center: seq[F3]
     cached_half_extents: seq[F3]
     cached_world_axes: seq[array[3, F3]]
+    cached_inverse_inertia_diag: seq[F3]
     cached_aabb: seq[FBB]
 
     dense_to_slot: seq[int]
@@ -125,6 +126,8 @@ proc update_body_collision_cache*(data: InternalData, dense_idx: int) =
   data.cached_world_axes[dense_idx] = [axis_x, axis_y, axis_z]
   data.cached_aabb[dense_idx] = compute_body_aabb(center, half_extents, data.cached_world_axes[dense_idx])
 
+proc inverse_inertia*(dimensions: F3, inverse_mass: float32): F3
+
 proc create_cuboid*(
   data: InternalData,
   aabb_tree: DynamicAabbTree[BodyHandle],
@@ -154,6 +157,7 @@ proc create_cuboid*(
   data.cached_center.add default(F3)
   data.cached_half_extents.add default(F3)
   data.cached_world_axes.add default(array[3, F3])
+  data.cached_inverse_inertia_diag.add inverse_inertia(dimensions, inverse_mass)
   data.cached_aabb.add default(FBB)
   data.dense_to_slot.add slot
   data.aabb_node_idx.add invalid_node_index
@@ -187,6 +191,7 @@ proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], 
     data.cached_center[dense] = data.cached_center[last_dense]
     data.cached_half_extents[dense] = data.cached_half_extents[last_dense]
     data.cached_world_axes[dense] = data.cached_world_axes[last_dense]
+    data.cached_inverse_inertia_diag[dense] = data.cached_inverse_inertia_diag[last_dense]
     data.cached_aabb[dense] = data.cached_aabb[last_dense]
     data.aabb_node_idx[dense] = data.aabb_node_idx[last_dense]
     data.dense_to_slot[dense] = moved_slot
@@ -202,6 +207,7 @@ proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], 
   data.cached_center.setLen last_dense
   data.cached_half_extents.setLen last_dense
   data.cached_world_axes.setLen last_dense
+  data.cached_inverse_inertia_diag.setLen last_dense
   data.cached_aabb.setLen last_dense
   data.dense_to_slot.setLen last_dense
   data.aabb_node_idx.setLen last_dense
@@ -247,6 +253,11 @@ proc cached_world_axes_ptr*(data: InternalData): ptr UncheckedArray[array[3, F3]
     return nil
   cast[ptr UncheckedArray[array[3, F3]]](unsafeAddr data.cached_world_axes[0])
 
+proc cached_inverse_inertia_diag_ptr*(data: InternalData): ptr UncheckedArray[F3] =
+  if data.cached_inverse_inertia_diag.len == 0:
+    return nil
+  cast[ptr UncheckedArray[F3]](unsafeAddr data.cached_inverse_inertia_diag[0])
+
 proc inverse_mass*(data: InternalData, handle: BodyHandle): float32 =
   result = data.inverse_mass[data.slot_to_dense[handle.slot]]
 
@@ -259,6 +270,14 @@ proc inverse_inertia*(dimensions: F3, inverse_mass: float32): F3 =
   let iy = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.z * dimensions.z)
   let iz = (1'f32 / 12'f32) * mass * (dimensions.x * dimensions.x + dimensions.y * dimensions.y)
   result = (1'f32 / ix, 1'f32 / iy, 1'f32 / iz)
+
+proc apply_inverse_inertia_world*(data: InternalData, dense_idx: int, v: F3): F3 =
+  let axes = data.cached_world_axes[dense_idx]
+  let inverse_inertia_diag = data.cached_inverse_inertia_diag[dense_idx]
+  result =
+    axes[0] * (inverse_inertia_diag.x * (axes[0] ∙ v)) +
+    axes[1] * (inverse_inertia_diag.y * (axes[1] ∙ v)) +
+    axes[2] * (inverse_inertia_diag.z * (axes[2] ∙ v))
 
 proc update_cuboid_aabb*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], dense_idx: int, displacement: F3) =
   let node_idx = data.aabb_node_idx[dense_idx]

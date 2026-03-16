@@ -31,51 +31,51 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
             nim.tickWorld(worldIndex)
         }
 
-        Arena.ofConfined().use { arena ->
-            val nodeCount = nim.numAabbTreeNodes(worldIndex)
-            for (i in 0 until nodeCount) {
-                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
-            }
-
-            var collisionIndex = 0
-            while (true) {
-                val collision = nim.getCollisionResult(arena, worldIndex, collisionIndex)
-                if (collision.isSentinel()) break
-
-                val contactCount = minOf(collision.contactCount, collision.contactPoints.size)
-                for (contactIndex in 0 until contactCount) {
-                    val contact = collision.contactPoints[contactIndex]
-                    val point = contact.position
-                    bukkitWorld.spawnParticle(
-                        Particle.END_ROD,
-                        point.x.toDouble(),
-                        point.y.toDouble(),
-                        point.z.toDouble(),
-                        1,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                    )
-
-                    val normalEnd = Vector3f(contact.normal).mul(contact.penetrationDepth).add(point)
-                    drawParticleLine(
-                        world = bukkitWorld,
-                        startX = point.x.toDouble(),
-                        startY = point.y.toDouble(),
-                        startZ = point.z.toDouble(),
-                        endX = normalEnd.x.toDouble(),
-                        endY = normalEnd.y.toDouble(),
-                        endZ = normalEnd.z.toDouble(),
-                        interval = 0.15f,
-                        particle = EdgeParticle.REDSTONE,
-                        dustOptions = contactNormalDust,
-                    )
-                }
-
-                collisionIndex++
-            }
-        }
+//        Arena.ofConfined().use { arena ->
+//            val nodeCount = nim.numAabbTreeNodes(worldIndex)
+//            for (i in 0 until nodeCount) {
+//                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
+//            }
+//
+//            var collisionIndex = 0
+//            while (true) {
+//                val collision = nim.getCollisionResult(arena, worldIndex, collisionIndex)
+//                if (collision.isSentinel()) break
+//
+//                val contactCount = minOf(collision.contactCount, collision.contactPoints.size)
+//                for (contactIndex in 0 until contactCount) {
+//                    val contact = collision.contactPoints[contactIndex]
+//                    val point = contact.position
+//                    bukkitWorld.spawnParticle(
+//                        Particle.END_ROD,
+//                        point.x.toDouble(),
+//                        point.y.toDouble(),
+//                        point.z.toDouble(),
+//                        1,
+//                        0.0,
+//                        0.0,
+//                        0.0,
+//                        0.0,
+//                    )
+//
+//                    val normalEnd = Vector3f(contact.normal).mul(contact.penetrationDepth).add(point)
+//                    drawParticleLine(
+//                        world = bukkitWorld,
+//                        startX = point.x.toDouble(),
+//                        startY = point.y.toDouble(),
+//                        startZ = point.z.toDouble(),
+//                        endX = normalEnd.x.toDouble(),
+//                        endY = normalEnd.y.toDouble(),
+//                        endZ = normalEnd.z.toDouble(),
+//                        interval = 0.15f,
+//                        particle = EdgeParticle.REDSTONE,
+//                        dustOptions = contactNormalDust,
+//                    )
+//                }
+//
+//                collisionIndex++
+//            }
+//        }
     }
 
     fun bukkitTick() {

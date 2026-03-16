@@ -16,8 +16,10 @@ import kotlin.random.Random
 class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
     private data class CuboidOptions(
         val dimensions: Vector3f,
+        val velocity: Vector3f,
         val rotationEulerDegrees: Vector3f?,
         val angularVelocity: Vector3f,
+        val inverseMass: Float,
     )
 
     fun init() {
@@ -27,7 +29,7 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
     val nim = plugin.nim
 
     private fun usage(label: String) =
-        "/$label [--dimensions x y z] [--rotation pitch yaw roll] [--angular-velocity x y z]"
+        "/$label [--dimensions x y z] [--velocity x y z] [--rotation pitch yaw roll] [--angular-velocity x y z] [--inverse-mass value]"
 
     private fun errorMessage(label: String, message: String): String =
         if (message == "help") usage(label) else "$message. Usage: ${usage(label)}"
@@ -54,8 +56,10 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
     private fun parseOptions(args: Array<out String>): Result<CuboidOptions> {
         var index = 0
         var dimensions = Vector3f(1f)
+        var velocity = Vector3f()
         var rotationEulerDegrees: Vector3f? = null
         var angularVelocity = Vector3f()
+        var inverseMass = 0.5f
 
         while (index < args.size) {
             when (args[index]) {
@@ -64,6 +68,13 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                         return Result.failure(it)
                     }
                     dimensions = value
+                    index = nextIndex
+                }
+                "--velocity", "--vel", "-v" -> {
+                    val (value, nextIndex) = parseVector3(args, index + 1, "--velocity").getOrElse {
+                        return Result.failure(it)
+                    }
+                    velocity = value
                     index = nextIndex
                 }
                 "--rotation", "-r" -> {
@@ -80,6 +91,14 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                     angularVelocity = value
                     index = nextIndex
                 }
+                "--inverse-mass", "--inv-mass", "-m" -> {
+                    if (index + 1 >= args.size) {
+                        return Result.failure(IllegalArgumentException("--inverse-mass requires 1 value"))
+                    }
+                    inverseMass = args[index + 1].toFloatOrNull()
+                        ?: return Result.failure(IllegalArgumentException("Invalid --inverse-mass value: ${args[index + 1]}"))
+                    index += 2
+                }
                 "--help", "-h" -> {
                     return Result.failure(IllegalArgumentException("help"))
                 }
@@ -92,12 +111,17 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
         if (dimensions.x <= 0f || dimensions.y <= 0f || dimensions.z <= 0f) {
             return Result.failure(IllegalArgumentException("Dimensions must be positive"))
         }
+        if (inverseMass < 0f) {
+            return Result.failure(IllegalArgumentException("Inverse mass must be non-negative"))
+        }
 
         return Result.success(
             CuboidOptions(
                 dimensions = dimensions,
+                velocity = velocity,
                 rotationEulerDegrees = rotationEulerDegrees,
                 angularVelocity = angularVelocity,
+                inverseMass = inverseMass,
             )
         )
     }
@@ -139,11 +163,11 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
                 sender.location.y,
                 sender.location.z,
             ),
-            Vector3f(),
+            options.velocity,
             options.angularVelocity,
             rotation,
             options.dimensions,
-            0.5f,
+            options.inverseMass,
         )
 
         nimWorld.potentialBodyHandles += potentialBodyHandle

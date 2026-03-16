@@ -3,6 +3,7 @@ import std/monotimes
 
 import physics_math
 import command_queue
+import constraint_solver
 import cuboids
 import dynamic_aabb_tree
 import narrowphase
@@ -20,6 +21,7 @@ type
     command_queue*: CommandQueue
     aabb_tree: DynamicAabbTree[BodyHandle]
     narrowphase_pool: NarrowphasePool
+    velocity_constraints: VelocityConstraintBuffer
     contact_manifolds: seq[CollisionManifold]
 
 var worlds*: seq[World]
@@ -77,9 +79,13 @@ proc tick_world*(world_index: int) =
       inc manifold_idx
 
   let Δt = world.Δt
-  let acceleration = world.acceleration
   for i in 0 ..< data.local_pos.len:
-    data.vel[i] += acceleration * Δt
+    data.vel[i] += world.acceleration * Δt
+
+  world.velocity_constraints.precompute_velocity_constraints(data, world.narrowphase_pool, Δt)
+  world.velocity_constraints.solve_velocity_constraints(data, velocity_solve_iterations, velocity_solve_sor)
+
+  for i in 0 ..< data.local_pos.len:
     let displacement = data.vel[i] * Δt
     data.local_pos[i] += displacement
     let ω = data.ω[i]
@@ -92,7 +98,7 @@ proc tick_world*(world_index: int) =
   data.update_external_data(world.external_data)
 
   let finish = get_mono_time()
-  # echo "physics tick took=", in_milliseconds(finish - start)
+  echo "physics tick took=", in_milliseconds(finish - start)
 
 proc deinit_world*(world: World) =
   if world.is_nil or not world.valid:

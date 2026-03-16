@@ -210,6 +210,56 @@ proc test_narrowphase_dispatch_smoke() =
   doAssert world.narrowphase_manifold_count() >= 1
   doAssert world.get_narrowphase_manifold(0).contact_count > 0
 
+proc test_floor_contact_solves_velocity() =
+  let world = fresh_world(dt = 1'f32 / 60'f32, acceleration = (0'f32, -9.8'f32, 0'f32))
+  var floor_packed = PackedHandle(slot: -1, generation: 0)
+  var box_packed = PackedHandle(slot: -1, generation: 0)
+
+  world.enqueue_add(
+    packed_handle = addr floor_packed,
+    pos = (0'f64, -1'f64, 0'f64),
+    vel = (0'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (6'f32, 2'f32, 6'f32),
+    inverse_mass = 0'f32,
+  )
+  world.enqueue_add(
+    packed_handle = addr box_packed,
+    pos = (0'f64, 0.49'f64, 0'f64),
+    vel = (0'f32, -0.5'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (1'f32, 1'f32, 1'f32),
+  )
+
+  tick_world(0)
+
+  doAssert world.internal_data.vel[1].y > -0.663334'f32
+
+proc test_head_on_collision_reduces_relative_velocity() =
+  let world = fresh_world(dt = 1'f32 / 60'f32)
+  var packed_a = PackedHandle(slot: -1, generation: 0)
+  var packed_b = PackedHandle(slot: -1, generation: 0)
+
+  world.enqueue_add(
+    packed_handle = addr packed_a,
+    pos = (0'f64, 0'f64, 0'f64),
+    vel = (1'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  world.enqueue_add(
+    packed_handle = addr packed_b,
+    pos = (1.98'f64, 0'f64, 0'f64),
+    vel = (-1'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+
+  tick_world(0)
+
+  doAssert abs(world.internal_data.vel[0].x - world.internal_data.vel[1].x) < 0.5'f32
+  doAssert abs(world.internal_data.vel[0].x + world.internal_data.vel[1].x) < 1.0e-3'f32
+
 proc test_rotate_vector() =
   let identity = quat_identity(float32)
   let v0 = rotate_vector(identity, (1'f32, 2'f32, 3'f32))
@@ -238,6 +288,8 @@ when is_main_module:
   test_per_tick_motion_updates_tree()
   test_rotation_changes_broadphase_bounds()
   test_narrowphase_dispatch_smoke()
+  test_floor_contact_solves_velocity()
+  test_head_on_collision_reduces_relative_velocity()
   test_rotate_vector()
   deinit_worlds()
   echo "sim aabb integration tests passed"
