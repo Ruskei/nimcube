@@ -1,6 +1,5 @@
 package com.timur.nimcube.command
 
-import com.timur.nimcube.Nim
 import com.timur.nimcube.Nimcube
 import org.bukkit.Bukkit
 import org.bukkit.command.Command
