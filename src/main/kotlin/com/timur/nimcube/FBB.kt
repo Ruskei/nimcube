@@ -38,6 +38,23 @@ fun Nim.FBB.showEdges(world: World, interval: Float, particle: EdgeParticle = Ed
     drawEdge(world, maxX, maxY, minZ, maxX, maxY, maxZ, step, particle)
 }
 
+fun drawParticleLine(
+    world: World,
+    startX: Double,
+    startY: Double,
+    startZ: Double,
+    endX: Double,
+    endY: Double,
+    endZ: Double,
+    interval: Float,
+    particle: EdgeParticle = EdgeParticle.REDSTONE,
+    dustOptions: Particle.DustOptions = Particle.DustOptions(Color.RED, 0.5f),
+) {
+    val step = interval.toDouble()
+    if (step <= 0.0) return
+    drawEdge(world, startX, startY, startZ, endX, endY, endZ, step, particle, dustOptions)
+}
+
 private fun drawEdge(
     world: World,
     startX: Double,
@@ -48,13 +65,13 @@ private fun drawEdge(
     endZ: Double,
     interval: Double,
     particle: EdgeParticle,
+    dustOptions: Particle.DustOptions = Particle.DustOptions(Color.RED, 0.5f),
 ) {
     val dx = endX - startX
     val dy = endY - startY
     val dz = endZ - startZ
     val length = max(max(kotlin.math.abs(dx), kotlin.math.abs(dy)), kotlin.math.abs(dz))
     val steps = max(1, ceil(length / interval).toInt())
-    val redstoneOptions = Particle.DustOptions(Color.RED, 0.5f)
 
     for (i in 0..steps) {
         val t = i.toDouble() / steps
@@ -84,7 +101,7 @@ private fun drawEdge(
                 0.0,
                 0.0,
                 0.0,
-                redstoneOptions,
+                dustOptions,
             )
         }
     }

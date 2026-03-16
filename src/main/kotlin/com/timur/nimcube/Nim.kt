@@ -54,6 +54,7 @@ class Nim(plugin: Nimcube) {
     val getBodyHandle: MethodHandle
     val numAabbTreeNodesHandle: MethodHandle
     val getAabbTreeNodeHandle: MethodHandle
+    val getCollisionResultHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
 //    val getCuboidInverseMassHandle: MethodHandle
@@ -124,6 +125,37 @@ class Nim(plugin: Nimcube) {
         val maxZ: Float,
     )
 
+    data class CollisionContactPoint(
+        val position: Vector3f,
+        val normal: Vector3f,
+        val penetrationDepth: Float,
+    )
+
+    data class CollisionResult(
+        val contactCount: Int,
+        val bodyA: BodyHandle,
+        val bodyB: BodyHandle,
+        val manifoldId: Long,
+        val contactPoints: List<CollisionContactPoint>,
+    ) {
+        fun isSentinel(): Boolean =
+            contactCount == -1 &&
+            bodyA.slot == -1 &&
+            bodyA.generation == 0 &&
+            bodyB.slot == -1 &&
+            bodyB.generation == 0 &&
+            manifoldId == 0L &&
+            contactPoints.all {
+                it.position.x == 0f &&
+                it.position.y == 0f &&
+                it.position.z == 0f &&
+                it.normal.x == 0f &&
+                it.normal.y == 0f &&
+                it.normal.z == 0f &&
+                it.penetrationDepth == 0f
+            }
+    }
+
     val C_FBB = MemoryLayout.structLayout(
         ValueLayout.JAVA_FLOAT.withName("minX"),
         ValueLayout.JAVA_FLOAT.withName("minY"),
@@ -131,6 +163,25 @@ class Nim(plugin: Nimcube) {
         ValueLayout.JAVA_FLOAT.withName("maxX"),
         ValueLayout.JAVA_FLOAT.withName("maxY"),
         ValueLayout.JAVA_FLOAT.withName("maxZ"),
+    )
+    val C_CollisionContactPoint = MemoryLayout.structLayout(
+        ValueLayout.JAVA_FLOAT.withName("posX"),
+        ValueLayout.JAVA_FLOAT.withName("posY"),
+        ValueLayout.JAVA_FLOAT.withName("posZ"),
+        ValueLayout.JAVA_FLOAT.withName("normalX"),
+        ValueLayout.JAVA_FLOAT.withName("normalY"),
+        ValueLayout.JAVA_FLOAT.withName("normalZ"),
+        ValueLayout.JAVA_FLOAT.withName("penetrationDepth"),
+    )
+    val C_CollisionManifold = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("contactCount"),
+        ValueLayout.JAVA_INT.withName("bodyASlot"),
+        ValueLayout.JAVA_INT.withName("bodyAGeneration"),
+        ValueLayout.JAVA_INT.withName("bodyBSlot"),
+        ValueLayout.JAVA_INT.withName("bodyBGeneration"),
+        MemoryLayout.paddingLayout(4),
+        ValueLayout.JAVA_LONG.withName("manifoldId"),
+        MemoryLayout.sequenceLayout(4, C_CollisionContactPoint).withName("contactPoints"),
     )
 
     init {
@@ -234,6 +285,13 @@ class Nim(plugin: Nimcube) {
             lookup.findOrThrow("c_get_aabb_tree_node"),
             FunctionDescriptor.of(
                 C_FBB,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+            )
+        )
+        getCollisionResultHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_collision_result"),
+            FunctionDescriptor.of(
+                C_CollisionManifold,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
@@ -354,6 +412,44 @@ class Nim(plugin: Nimcube) {
             segment.get(ValueLayout.JAVA_FLOAT, 12),
             segment.get(ValueLayout.JAVA_FLOAT, 16),
             segment.get(ValueLayout.JAVA_FLOAT, 20),
+        )
+    }
+
+    fun getCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): CollisionResult {
+        val segment = getCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
+        val contactPoints = ArrayList<CollisionContactPoint>(4)
+        val contactPointBaseOffset = 32L
+        val contactPointStride = 28L
+
+        for (i in 0 until 4) {
+            val baseOffset = contactPointBaseOffset + i * contactPointStride
+            contactPoints += CollisionContactPoint(
+                position = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 0),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 4),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 8),
+                ),
+                normal = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 12),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 16),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 20),
+                ),
+                penetrationDepth = segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 24),
+            )
+        }
+
+        return CollisionResult(
+            contactCount = segment.get(ValueLayout.JAVA_INT, 0),
+            bodyA = BodyHandle(
+                segment.get(ValueLayout.JAVA_INT, 4),
+                segment.get(ValueLayout.JAVA_INT, 8),
+            ),
+            bodyB = BodyHandle(
+                segment.get(ValueLayout.JAVA_INT, 12),
+                segment.get(ValueLayout.JAVA_INT, 16),
+            ),
+            manifoldId = segment.get(ValueLayout.JAVA_LONG, 24),
+            contactPoints = contactPoints,
         )
     }
 

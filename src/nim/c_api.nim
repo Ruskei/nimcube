@@ -4,6 +4,7 @@ import packed_handle
 import physics_math
 import meshing
 import cuboids
+import narrowphase
 import rw_lock
 
 type
@@ -20,6 +21,16 @@ type
     handle_slot, handle_generation: int32
   C_FBB {.bycopy.} = object
     min_x, min_y, min_z, max_x, max_y, max_z: float32
+  C_CollisionContactPoint {.bycopy.} = object
+    pos_x, pos_y, pos_z: float32
+    normal_x, normal_y, normal_z: float32
+    penetration_depth: float32
+  C_CollisionManifold {.bycopy.} = object
+    contact_count: int32
+    body_a_slot, body_a_generation: int32
+    body_b_slot, body_b_generation: int32
+    manifold_id: uint64
+    contact_points: array[4, C_CollisionContactPoint]
 
 converter d3_to_c(v: D3): C_D3 =
   result.x = v.x
@@ -55,6 +66,35 @@ proc invalid_fbb(): C_FBB =
     min_x: 0'f32, min_y: 0'f32, min_z: 0'f32,
     max_x: -1'f32, max_y: -1'f32, max_z: -1'f32,
   )
+
+proc invalid_collision_manifold(): C_CollisionManifold =
+  result = C_CollisionManifold(
+    contact_count: -1'i32,
+    body_a_slot: -1'i32,
+    body_a_generation: 0'i32,
+    body_b_slot: -1'i32,
+    body_b_generation: 0'i32,
+    manifold_id: 0'u64,
+  )
+
+proc to_c(contact_point: ContactPoint): C_CollisionContactPoint =
+  result.pos_x = contact_point.position.x
+  result.pos_y = contact_point.position.y
+  result.pos_z = contact_point.position.z
+  result.normal_x = contact_point.normal.x
+  result.normal_y = contact_point.normal.y
+  result.normal_z = contact_point.normal.z
+  result.penetration_depth = contact_point.penetration_depth
+
+proc to_c(manifold: CollisionManifold): C_CollisionManifold =
+  result.contact_count = manifold.contact_count.int32
+  result.body_a_slot = manifold.body_a.slot.int32
+  result.body_a_generation = manifold.body_a.generation.int32
+  result.body_b_slot = manifold.body_b.slot.int32
+  result.body_b_generation = manifold.body_b.generation.int32
+  result.manifold_id = manifold.manifold_id
+  for idx in 0 ..< manifold.contact_points.len:
+    result.contact_points[idx] = manifold.contact_points[idx].to_c()
 
 proc c_create_world(
   Δt, acceleration_x, acceleration_y, acceleration_z: float32
@@ -183,6 +223,16 @@ proc c_get_aabb_tree_node(world_index: cint, node_index: cint): C_FBB {.cdecl, e
   result.max_x = bb.max.x
   result.max_y = bb.max.y
   result.max_z = bb.max.z
+
+proc c_get_collision_result(world_index: cint, collision_index: cint): C_CollisionManifold {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return invalid_collision_manifold()
+  let world = worlds[world_index]
+  if not world.valid: return invalid_collision_manifold()
+  if collision_index < 0: return invalid_collision_manifold()
+  if collision_index.int >= world.narrowphase_manifold_count():
+    return invalid_collision_manifold()
+
+  result = world.get_narrowphase_manifold(collision_index.int).to_c()
 
 proc c_greedy_mesh*(
   origin_x, origin_y, origin_z: cint;

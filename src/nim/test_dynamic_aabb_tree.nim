@@ -25,11 +25,6 @@ proc make_bb(
   result.min = (min_x, min_y, min_z)
   result.max = (max_x, max_y, max_z)
 
-proc overlaps(a, b: FBB): bool =
-  a.min.x < b.max.x and a.max.x > b.min.x and
-  a.min.y < b.max.y and a.max.y > b.min.y and
-  a.min.z < b.max.z and a.max.z > b.min.z
-
 proc collect_query[T](tree: DynamicAabbTree[T], box: FBB): seq[NodeIndex] =
   for leaf_idx in tree.query(box):
     result.add leaf_idx

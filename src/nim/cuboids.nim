@@ -17,6 +17,10 @@ type
     rot*: seq[QF]
     dimensions*: seq[F3]
     inverse_mass*: seq[float32]
+    cached_center: seq[F3]
+    cached_half_extents: seq[F3]
+    cached_world_axes: seq[array[3, F3]]
+    cached_aabb: seq[FBB]
 
     dense_to_slot: seq[int]
     slot_to_dense: seq[int]
@@ -71,37 +75,55 @@ proc is_valid*(data: ExternalData, handle: BodyHandle): bool =
       data.slot_to_dense[handle.slot] != slot_invalid
   result = is_valid
 
-proc body_aabb(data: InternalData, dense_idx: int): FBB =
-  let center = (
-    x: (data.initial_pos[dense_idx].x + data.local_pos[dense_idx].x.float64).float32,
-    y: (data.initial_pos[dense_idx].y + data.local_pos[dense_idx].y.float64).float32,
-    z: (data.initial_pos[dense_idx].z + data.local_pos[dense_idx].z.float64).float32,
-  )
-  let half_extents = data.dimensions[dense_idx] * 0.5'f32
-  let q = data.rot[dense_idx]
-  let local_corners = [
-    ( half_extents.x,  half_extents.y,  half_extents.z),
-    ( half_extents.x,  half_extents.y, -half_extents.z),
-    ( half_extents.x, -half_extents.y,  half_extents.z),
-    ( half_extents.x, -half_extents.y, -half_extents.z),
-    (-half_extents.x,  half_extents.y,  half_extents.z),
-    (-half_extents.x,  half_extents.y, -half_extents.z),
-    (-half_extents.x, -half_extents.y,  half_extents.z),
-    (-half_extents.x, -half_extents.y, -half_extents.z),
+proc compute_body_aabb(center: F3, half_extents: F3, world_axes: array[3, F3]): FBB =
+  let local_corners: array[8, F3] = [
+    (x:  half_extents.x, y:  half_extents.y, z:  half_extents.z),
+    (x:  half_extents.x, y:  half_extents.y, z: -half_extents.z),
+    (x:  half_extents.x, y: -half_extents.y, z:  half_extents.z),
+    (x:  half_extents.x, y: -half_extents.y, z: -half_extents.z),
+    (x: -half_extents.x, y:  half_extents.y, z:  half_extents.z),
+    (x: -half_extents.x, y:  half_extents.y, z: -half_extents.z),
+    (x: -half_extents.x, y: -half_extents.y, z:  half_extents.z),
+    (x: -half_extents.x, y: -half_extents.y, z: -half_extents.z),
   ]
 
-  let first_corner = center + rotate_vector(q, local_corners[0])
+  let first_corner =
+    center +
+    local_corners[0].x * world_axes[0] +
+    local_corners[0].y * world_axes[1] +
+    local_corners[0].z * world_axes[2]
   result.min = first_corner
   result.max = first_corner
 
   for i in 1 ..< local_corners.len:
-    let corner = center + rotate_vector(q, local_corners[i])
+    let corner =
+      center +
+      local_corners[i].x * world_axes[0] +
+      local_corners[i].y * world_axes[1] +
+      local_corners[i].z * world_axes[2]
     if corner.x < result.min.x: result.min.x = corner.x
     if corner.y < result.min.y: result.min.y = corner.y
     if corner.z < result.min.z: result.min.z = corner.z
     if corner.x > result.max.x: result.max.x = corner.x
     if corner.y > result.max.y: result.max.y = corner.y
     if corner.z > result.max.z: result.max.z = corner.z
+
+proc update_body_collision_cache*(data: InternalData, dense_idx: int) =
+  let center: F3 = (
+    x: (data.initial_pos[dense_idx].x + data.local_pos[dense_idx].x.float64).float32,
+    y: (data.initial_pos[dense_idx].y + data.local_pos[dense_idx].y.float64).float32,
+    z: (data.initial_pos[dense_idx].z + data.local_pos[dense_idx].z.float64).float32,
+  )
+  let half_extents = data.dimensions[dense_idx] * 0.5'f32
+  let q = data.rot[dense_idx]
+  let axis_x = normalized(rotate_vector(q, (1'f32, 0'f32, 0'f32)))
+  let axis_y = normalized(rotate_vector(q, (0'f32, 1'f32, 0'f32)))
+  let axis_z = normalized(rotate_vector(q, (0'f32, 0'f32, 1'f32)))
+
+  data.cached_center[dense_idx] = center
+  data.cached_half_extents[dense_idx] = half_extents
+  data.cached_world_axes[dense_idx] = [axis_x, axis_y, axis_z]
+  data.cached_aabb[dense_idx] = compute_body_aabb(center, half_extents, data.cached_world_axes[dense_idx])
 
 proc create_cuboid*(
   data: InternalData,
@@ -129,12 +151,17 @@ proc create_cuboid*(
   data.rot.add normalized(rot)
   data.dimensions.add dimensions
   data.inverse_mass.add inverse_mass
+  data.cached_center.add default(F3)
+  data.cached_half_extents.add default(F3)
+  data.cached_world_axes.add default(array[3, F3])
+  data.cached_aabb.add default(FBB)
   data.dense_to_slot.add slot
   data.aabb_node_idx.add invalid_node_index
   data.slot_to_dense[slot] = dense
 
   result = BodyHandle(slot: slot, generation: data.generation[slot])
-  data.aabb_node_idx[dense] = aabb_tree.insert(data.body_aabb(dense), result)
+  data.update_body_collision_cache(dense)
+  data.aabb_node_idx[dense] = aabb_tree.insert(data.cached_aabb[dense], result)
 
 proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], handle: BodyHandle): bool =
   if not data.is_valid(handle):
@@ -157,6 +184,10 @@ proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], 
     data.rot[dense] = data.rot[last_dense]
     data.dimensions[dense] = data.dimensions[last_dense]
     data.inverse_mass[dense] = data.inverse_mass[last_dense]
+    data.cached_center[dense] = data.cached_center[last_dense]
+    data.cached_half_extents[dense] = data.cached_half_extents[last_dense]
+    data.cached_world_axes[dense] = data.cached_world_axes[last_dense]
+    data.cached_aabb[dense] = data.cached_aabb[last_dense]
     data.aabb_node_idx[dense] = data.aabb_node_idx[last_dense]
     data.dense_to_slot[dense] = moved_slot
     data.slot_to_dense[moved_slot] = dense
@@ -168,6 +199,10 @@ proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], 
   data.rot.setLen last_dense
   data.dimensions.setLen last_dense
   data.inverse_mass.setLen last_dense
+  data.cached_center.setLen last_dense
+  data.cached_half_extents.setLen last_dense
+  data.cached_world_axes.setLen last_dense
+  data.cached_aabb.setLen last_dense
   data.dense_to_slot.setLen last_dense
   data.aabb_node_idx.setLen last_dense
 
@@ -186,6 +221,32 @@ proc rot*(data: InternalData, handle: BodyHandle): QF =
 proc dimensions*(data: InternalData, handle: BodyHandle): F3 =
   result = data.dimensions[data.slot_to_dense[handle.slot]]
 
+proc aabb*(data: InternalData, handle: BodyHandle): FBB =
+  result = data.cached_aabb[data.slot_to_dense[handle.slot]]
+
+proc slot_count*(data: InternalData): int =
+  data.slot_to_dense.len
+
+proc slot_to_dense_ptr*(data: InternalData): ptr UncheckedArray[int] =
+  if data.slot_to_dense.len == 0:
+    return nil
+  cast[ptr UncheckedArray[int]](unsafeAddr data.slot_to_dense[0])
+
+proc cached_center_ptr*(data: InternalData): ptr UncheckedArray[F3] =
+  if data.cached_center.len == 0:
+    return nil
+  cast[ptr UncheckedArray[F3]](unsafeAddr data.cached_center[0])
+
+proc cached_half_extents_ptr*(data: InternalData): ptr UncheckedArray[F3] =
+  if data.cached_half_extents.len == 0:
+    return nil
+  cast[ptr UncheckedArray[F3]](unsafeAddr data.cached_half_extents[0])
+
+proc cached_world_axes_ptr*(data: InternalData): ptr UncheckedArray[array[3, F3]] =
+  if data.cached_world_axes.len == 0:
+    return nil
+  cast[ptr UncheckedArray[array[3, F3]]](unsafeAddr data.cached_world_axes[0])
+
 proc inverse_mass*(data: InternalData, handle: BodyHandle): float32 =
   result = data.inverse_mass[data.slot_to_dense[handle.slot]]
 
@@ -203,7 +264,7 @@ proc update_cuboid_aabb*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHand
   let node_idx = data.aabb_node_idx[dense_idx]
   if node_idx == invalid_node_index:
     return
-  discard aabb_tree.update(node_idx, data.body_aabb(dense_idx), displacement)
+  discard aabb_tree.update(node_idx, data.cached_aabb[dense_idx], displacement)
 
 proc update_external_data*(internal_data: InternalData, external_data: var ExternalData) =
   with_write_lock(external_data.lock):

@@ -20,6 +20,7 @@ proc make_bb(
   result.max = (max_x, max_y, max_z)
 
 proc fresh_world(dt = 0.1'f32, acceleration: F3 = (0'f32, 0'f32, 0'f32)): World =
+  deinit_worlds()
   worlds.set_len(0)
   worlds.add init_world(dt, acceleration)
   worlds[0]
@@ -182,6 +183,33 @@ proc test_rotation_changes_broadphase_bounds() =
   doAssert hits.len == 1
   doAssert same_handle(hits[0], handle)
 
+proc test_narrowphase_dispatch_smoke() =
+  let world = fresh_world()
+  var packed_a = PackedHandle(slot: -1, generation: 0)
+  var packed_b = PackedHandle(slot: -1, generation: 0)
+
+  world.enqueue_add(
+    packed_handle = addr packed_a,
+    pos = (0'f64, 0'f64, 0'f64),
+    vel = (0'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  world.enqueue_add(
+    packed_handle = addr packed_b,
+    pos = (0.5'f64, 0'f64, 0'f64),
+    vel = (0'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+
+  tick_world(0)
+
+  doAssert world.valid
+  doAssert world.aabb_tree_leaf_count() == 2
+  doAssert world.narrowphase_manifold_count() >= 1
+  doAssert world.get_narrowphase_manifold(0).contact_count > 0
+
 proc test_rotate_vector() =
   let identity = quat_identity(float32)
   let v0 = rotate_vector(identity, (1'f32, 2'f32, 3'f32))
@@ -209,5 +237,7 @@ when is_main_module:
   test_dense_swap_keeps_tree_updates_valid()
   test_per_tick_motion_updates_tree()
   test_rotation_changes_broadphase_bounds()
+  test_narrowphase_dispatch_smoke()
   test_rotate_vector()
+  deinit_worlds()
   echo "sim aabb integration tests passed"
