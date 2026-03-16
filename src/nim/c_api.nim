@@ -31,6 +31,11 @@ type
     body_b_slot, body_b_generation: int32
     manifold_id: uint64
     contact_points: array[4, C_CollisionContactPoint]
+  C_A2sCollisionManifold {.bycopy.} = object
+    contact_count: int32
+    body_a_slot, body_a_generation: int32
+    manifold_id: uint64
+    contact_points: array[4, C_CollisionContactPoint]
 
 converter d3_to_c(v: D3): C_D3 =
   result.x = v.x
@@ -77,6 +82,14 @@ proc invalid_collision_manifold(): C_CollisionManifold =
     manifold_id: 0'u64,
   )
 
+proc invalid_a2s_collision_manifold(): C_A2sCollisionManifold =
+  result = C_A2sCollisionManifold(
+    contact_count: -1'i32,
+    body_a_slot: -1'i32,
+    body_a_generation: 0'i32,
+    manifold_id: 0'u64,
+  )
+
 proc to_c(contact_point: ContactPoint): C_CollisionContactPoint =
   result.pos_x = contact_point.position.x
   result.pos_y = contact_point.position.y
@@ -86,12 +99,20 @@ proc to_c(contact_point: ContactPoint): C_CollisionContactPoint =
   result.normal_z = contact_point.normal.z
   result.penetration_depth = contact_point.penetration_depth
 
-proc to_c(manifold: CollisionManifold): C_CollisionManifold =
+proc to_c(manifold: A2aCollisionManifold): C_CollisionManifold =
   result.contact_count = manifold.contact_count.int32
   result.body_a_slot = manifold.body_a.slot.int32
   result.body_a_generation = manifold.body_a.generation.int32
   result.body_b_slot = manifold.body_b.slot.int32
   result.body_b_generation = manifold.body_b.generation.int32
+  result.manifold_id = manifold.manifold_id
+  for idx in 0 ..< manifold.contact_points.len:
+    result.contact_points[idx] = manifold.contact_points[idx].to_c()
+
+proc to_c(manifold: A2sCollisionManifold): C_A2sCollisionManifold =
+  result.contact_count = manifold.contact_count.int32
+  result.body_a_slot = manifold.body_a.slot.int32
+  result.body_a_generation = manifold.body_a.generation.int32
   result.manifold_id = manifold.manifold_id
   for idx in 0 ..< manifold.contact_points.len:
     result.contact_points[idx] = manifold.contact_points[idx].to_c()
@@ -224,15 +245,25 @@ proc c_get_aabb_tree_node(world_index: cint, node_index: cint): C_FBB {.cdecl, e
   result.max_y = bb.max.y
   result.max_z = bb.max.z
 
-proc c_get_collision_result(world_index: cint, collision_index: cint): C_CollisionManifold {.cdecl, exportc, dynlib.} =
+proc c_get_a2a_collision_result(world_index: cint, collision_index: cint): C_CollisionManifold {.cdecl, exportc, dynlib.} =
   if world_index >= worlds.len: return invalid_collision_manifold()
   let world = worlds[world_index]
   if not world.valid: return invalid_collision_manifold()
   if collision_index < 0: return invalid_collision_manifold()
-  if collision_index.int >= world.narrowphase_manifold_count():
+  if collision_index.int >= world.a2a_narrowphase_manifold_count():
     return invalid_collision_manifold()
 
-  result = world.get_narrowphase_manifold(collision_index.int).to_c()
+  result = world.get_a2a_narrowphase_manifold(collision_index.int).to_c()
+
+proc c_get_a2s_collision_result(world_index: cint, collision_index: cint): C_A2sCollisionManifold {.cdecl, exportc, dynlib.} =
+  if world_index >= worlds.len: return invalid_a2s_collision_manifold()
+  let world = worlds[world_index]
+  if not world.valid: return invalid_a2s_collision_manifold()
+  if collision_index < 0: return invalid_a2s_collision_manifold()
+  if collision_index.int >= world.a2s_narrowphase_manifold_count():
+    return invalid_a2s_collision_manifold()
+
+  result = world.get_a2s_narrowphase_manifold(collision_index.int).to_c()
 
 proc c_greedy_mesh*(
   origin_x, origin_y, origin_z: cint;
@@ -240,6 +271,24 @@ proc c_greedy_mesh*(
 ): cint {.cdecl, exportc, dynlib.} =
   result = greedy_mesh(
     origin_x, origin_y, origin_z,
+    chunk_binary_data,
+  )
+
+proc c_add_chunk_mesh_to_world*(
+  world_index, chunk_x, chunk_z: cint;
+  chunk_binary_data: ptr ChunkBinaryData,
+): bool {.cdecl, exportc, dynlib.} =
+  if world_index < 0 or world_index >= worlds.len:
+    return false
+  if chunk_binary_data.isNil:
+    return false
+
+  let world = worlds[world_index]
+  if not world.valid:
+    return false
+
+  result = world.add_chunk_mesh(
+    chunk_position(chunk_x.int32, chunk_z.int32),
     chunk_binary_data,
   )
 

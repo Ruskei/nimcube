@@ -40,10 +40,10 @@ proc ensure_constraint_capacity(buffer: var VelocityConstraintBuffer, required_c
   if buffer.constraints.len < required_capacity:
     buffer.constraints.setLen(required_capacity)
 
-proc append_constraints_from_manifold(
+proc append_constraints_from_a2a_manifold(
   buffer: var VelocityConstraintBuffer,
   data: InternalData,
-  manifold: CollisionManifold,
+  manifold: A2aCollisionManifold,
   dt: float32,
   slot_to_dense: ptr UncheckedArray[int],
   centers: ptr UncheckedArray[F3],
@@ -134,15 +134,18 @@ proc precompute_velocity_constraints*(
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
     for manifold_idx in 0 ..< manifold_count:
-      required_capacity += pool.worker_output_at(worker_idx, manifold_idx).contact_count.int
+      let result = pool.worker_output_at(worker_idx, manifold_idx)
+      if result.kind == nrk_a2a:
+        required_capacity += result.a2a.contact_count.int
 
   buffer.ensure_constraint_capacity(required_capacity)
 
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
     for manifold_idx in 0 ..< manifold_count:
-      let manifold = pool.worker_output_at(worker_idx, manifold_idx)
-      buffer.append_constraints_from_manifold(data, manifold, dt, slot_to_dense, centers)
+      let result = pool.worker_output_at(worker_idx, manifold_idx)
+      if result.kind == nrk_a2a:
+        buffer.append_constraints_from_a2a_manifold(data, result.a2a, dt, slot_to_dense, centers)
 
 proc constraint_normal_velocity*(data: InternalData, constraint: VelocityConstraintPoint): float32 =
   let v_a = data.vel[constraint.dense_a] + (data.ω[constraint.dense_a] × constraint.r_a)

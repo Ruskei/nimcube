@@ -54,7 +54,8 @@ class Nim(plugin: Nimcube) {
     val getBodyHandle: MethodHandle
     val numAabbTreeNodesHandle: MethodHandle
     val getAabbTreeNodeHandle: MethodHandle
-    val getCollisionResultHandle: MethodHandle
+    val getA2aCollisionResultHandle: MethodHandle
+    val getA2sCollisionResultHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
 //    val getCuboidInverseMassHandle: MethodHandle
@@ -92,6 +93,7 @@ class Nim(plugin: Nimcube) {
     )
 
     val greedyMeshHandle: MethodHandle
+    val addChunkMeshToWorldHandle: MethodHandle
     val numBBsHandle: MethodHandle
     val getBBHandle: MethodHandle
 
@@ -131,7 +133,7 @@ class Nim(plugin: Nimcube) {
         val penetrationDepth: Float,
     )
 
-    data class CollisionResult(
+    data class A2aCollisionResult(
         val contactCount: Int,
         val bodyA: BodyHandle,
         val bodyB: BodyHandle,
@@ -144,6 +146,28 @@ class Nim(plugin: Nimcube) {
             bodyA.generation == 0 &&
             bodyB.slot == -1 &&
             bodyB.generation == 0 &&
+            manifoldId == 0L &&
+            contactPoints.all {
+                it.position.x == 0f &&
+                it.position.y == 0f &&
+                it.position.z == 0f &&
+                it.normal.x == 0f &&
+                it.normal.y == 0f &&
+                it.normal.z == 0f &&
+                it.penetrationDepth == 0f
+            }
+    }
+
+    data class A2sCollisionResult(
+        val contactCount: Int,
+        val bodyA: BodyHandle,
+        val manifoldId: Long,
+        val contactPoints: List<CollisionContactPoint>,
+    ) {
+        fun isSentinel(): Boolean =
+            contactCount == -1 &&
+            bodyA.slot == -1 &&
+            bodyA.generation == 0 &&
             manifoldId == 0L &&
             contactPoints.all {
                 it.position.x == 0f &&
@@ -179,6 +203,14 @@ class Nim(plugin: Nimcube) {
         ValueLayout.JAVA_INT.withName("bodyAGeneration"),
         ValueLayout.JAVA_INT.withName("bodyBSlot"),
         ValueLayout.JAVA_INT.withName("bodyBGeneration"),
+        MemoryLayout.paddingLayout(4),
+        ValueLayout.JAVA_LONG.withName("manifoldId"),
+        MemoryLayout.sequenceLayout(4, C_CollisionContactPoint).withName("contactPoints"),
+    )
+    val C_A2sCollisionManifold = MemoryLayout.structLayout(
+        ValueLayout.JAVA_INT.withName("contactCount"),
+        ValueLayout.JAVA_INT.withName("bodyASlot"),
+        ValueLayout.JAVA_INT.withName("bodyAGeneration"),
         MemoryLayout.paddingLayout(4),
         ValueLayout.JAVA_LONG.withName("manifoldId"),
         MemoryLayout.sequenceLayout(4, C_CollisionContactPoint).withName("contactPoints"),
@@ -288,10 +320,17 @@ class Nim(plugin: Nimcube) {
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
-        getCollisionResultHandle = linker.downcallHandle(
-            lookup.findOrThrow("c_get_collision_result"),
+        getA2aCollisionResultHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_a2a_collision_result"),
             FunctionDescriptor.of(
                 C_CollisionManifold,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+            )
+        )
+        getA2sCollisionResultHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_a2s_collision_result"),
+            FunctionDescriptor.of(
+                C_A2sCollisionManifold,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
@@ -300,6 +339,13 @@ class Nim(plugin: Nimcube) {
             lookup.findOrThrow("c_greedy_mesh"),
             FunctionDescriptor.of(
                 ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+            )
+        )
+        addChunkMeshToWorldHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_add_chunk_mesh_to_world"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_BOOLEAN,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
             )
         )
@@ -415,8 +461,8 @@ class Nim(plugin: Nimcube) {
         )
     }
 
-    fun getCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): CollisionResult {
-        val segment = getCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
+    fun getA2aCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2aCollisionResult {
+        val segment = getA2aCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
         val contactPointBaseOffset = 32L
         val contactPointStride = 28L
@@ -438,7 +484,7 @@ class Nim(plugin: Nimcube) {
             )
         }
 
-        return CollisionResult(
+        return A2aCollisionResult(
             contactCount = segment.get(ValueLayout.JAVA_INT, 0),
             bodyA = BodyHandle(
                 segment.get(ValueLayout.JAVA_INT, 4),
@@ -449,6 +495,40 @@ class Nim(plugin: Nimcube) {
                 segment.get(ValueLayout.JAVA_INT, 16),
             ),
             manifoldId = segment.get(ValueLayout.JAVA_LONG, 24),
+            contactPoints = contactPoints,
+        )
+    }
+
+    fun getA2sCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2sCollisionResult {
+        val segment = getA2sCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
+        val contactPoints = ArrayList<CollisionContactPoint>(4)
+        val contactPointBaseOffset = 24L
+        val contactPointStride = 28L
+
+        for (i in 0 until 4) {
+            val baseOffset = contactPointBaseOffset + i * contactPointStride
+            contactPoints += CollisionContactPoint(
+                position = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 0),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 4),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 8),
+                ),
+                normal = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 12),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 16),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 20),
+                ),
+                penetrationDepth = segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 24),
+            )
+        }
+
+        return A2sCollisionResult(
+            contactCount = segment.get(ValueLayout.JAVA_INT, 0),
+            bodyA = BodyHandle(
+                segment.get(ValueLayout.JAVA_INT, 4),
+                segment.get(ValueLayout.JAVA_INT, 8),
+            ),
+            manifoldId = segment.get(ValueLayout.JAVA_LONG, 16),
             contactPoints = contactPoints,
         )
     }
@@ -498,6 +578,9 @@ class Nim(plugin: Nimcube) {
 
     fun greedyMesh(originX: Int, originY: Int, originZ: Int, chunkBinaryData: MemorySegment): Int =
         greedyMeshHandle.invokeExact(originX, originY, originZ, chunkBinaryData) as Int
+
+    fun addChunkMeshToWorld(worldIndex: WorldIndex, chunkX: Int, chunkZ: Int, chunkBinaryData: MemorySegment): Boolean =
+        addChunkMeshToWorldHandle.invokeExact(worldIndex.index, chunkX, chunkZ, chunkBinaryData) as Boolean
 
     fun numBBs(chunkMeshIndex: Int): Int = numBBsHandle.invokeExact(chunkMeshIndex) as Int
 

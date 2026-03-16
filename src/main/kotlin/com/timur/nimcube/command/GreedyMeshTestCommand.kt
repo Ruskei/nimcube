@@ -1,5 +1,6 @@
 package com.timur.nimcube.command
 
+import com.timur.nimcube.NimWorld
 import com.timur.nimcube.Nimcube
 import net.minecraft.core.BlockPos
 import org.bukkit.Bukkit
@@ -27,16 +28,25 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
     ): Boolean {
         if (sender !is Player) return true
         val world = sender.world
-        val chunkMeshIndex: Int
+        val nimWorld =
+            plugin.nimWorlds.getOrPut(world) {
+                NimWorld(
+                    plugin,
+                    world,
+                    plugin.Δt,
+                    plugin.acceleration,
+                ).also { it.init() }
+            }
+        var added = false
         val totalDuration = measureTime {
             val serverLevel = (sender.world as CraftWorld).handle
-            val chunk = serverLevel.getChunk(sender.x.toInt() shr 4, sender.z.toInt() shr 4)
 
             Arena.ofConfined().use { arena ->
                 val binarySegment = arena.allocate(CHUNK_BINARY_DATA_SIZE.toLong())
-
-                val minX = chunk.pos.minBlockX
-                val minZ = chunk.pos.minBlockZ
+                val chunkX = Math.floorDiv(sender.location.blockX, PHYSICS_CHUNK_WIDTH)
+                val chunkZ = Math.floorDiv(sender.location.blockZ, PHYSICS_CHUNK_WIDTH)
+                val minX = chunkX * PHYSICS_CHUNK_WIDTH
+                val minZ = chunkZ * PHYSICS_CHUNK_WIDTH
 
                 val bp = BlockPos(0, 0, 0).mutable()
                 for (y in 0..<CHUNK_HEIGHT)
@@ -55,10 +65,11 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
                             binarySegment.setAtIndex(ValueLayout.JAVA_LONG, longIndex.toLong(), long)
                         }
 
-                chunkMeshIndex = nim.greedyMesh(minX, MIN_HEIGHT, minZ, binarySegment)
+                added = nim.addChunkMeshToWorld(nimWorld.worldIndex, chunkX, chunkZ, binarySegment)
             }
         }
 
+        sender.sendMessage("chunk mesh added=$added in $totalDuration")
         println("Total duration: $totalDuration")
 
         return true

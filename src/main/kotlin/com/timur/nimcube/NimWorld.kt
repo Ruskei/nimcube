@@ -11,7 +11,10 @@ import java.util.concurrent.ConcurrentLinkedDeque
 import kotlin.math.round
 
 class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val acceleration: Vector3f) {
-    private val contactNormalDust = Particle.DustOptions(Color.AQUA, 0.4f)
+    private val a2aContactPointDust = Particle.DustOptions(Color.PURPLE, 0.4f)
+    private val a2aContactNormalDust = Particle.DustOptions(Color.AQUA, 0.4f)
+    private val a2sContactPointDust = Particle.DustOptions(Color.BLACK, 0.4f)
+    private val a2sContactNormalDust = Particle.DustOptions(Color.LIME, 0.4f)
 
     val nim = plugin.nim
     val worldIndex = nim.createWorld(dt, acceleration)
@@ -31,51 +34,77 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
             nim.tickWorld(worldIndex)
         }
 
-//        Arena.ofConfined().use { arena ->
-//            val nodeCount = nim.numAabbTreeNodes(worldIndex)
-//            for (i in 0 until nodeCount) {
-//                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
-//            }
-//
-//            var collisionIndex = 0
-//            while (true) {
-//                val collision = nim.getCollisionResult(arena, worldIndex, collisionIndex)
-//                if (collision.isSentinel()) break
-//
-//                val contactCount = minOf(collision.contactCount, collision.contactPoints.size)
-//                for (contactIndex in 0 until contactCount) {
-//                    val contact = collision.contactPoints[contactIndex]
-//                    val point = contact.position
-//                    bukkitWorld.spawnParticle(
-//                        Particle.END_ROD,
-//                        point.x.toDouble(),
-//                        point.y.toDouble(),
-//                        point.z.toDouble(),
-//                        1,
-//                        0.0,
-//                        0.0,
-//                        0.0,
-//                        0.0,
-//                    )
-//
-//                    val normalEnd = Vector3f(contact.normal).mul(contact.penetrationDepth).add(point)
-//                    drawParticleLine(
-//                        world = bukkitWorld,
-//                        startX = point.x.toDouble(),
-//                        startY = point.y.toDouble(),
-//                        startZ = point.z.toDouble(),
-//                        endX = normalEnd.x.toDouble(),
-//                        endY = normalEnd.y.toDouble(),
-//                        endZ = normalEnd.z.toDouble(),
-//                        interval = 0.15f,
-//                        particle = EdgeParticle.REDSTONE,
-//                        dustOptions = contactNormalDust,
-//                    )
-//                }
-//
-//                collisionIndex++
-//            }
-//        }
+        Arena.ofConfined().use { arena ->
+            val nodeCount = nim.numAabbTreeNodes(worldIndex)
+            for (i in 0 until nodeCount) {
+                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
+            }
+
+            var collisionIndex = 0
+            while (true) {
+                val collision = nim.getA2aCollisionResult(arena, worldIndex, collisionIndex)
+                if (collision.isSentinel()) break
+                showCollisionContacts(
+                    collision.contactCount,
+                    collision.contactPoints,
+                    a2aContactPointDust,
+                    a2aContactNormalDust
+                )
+                collisionIndex++
+            }
+
+            collisionIndex = 0
+            while (true) {
+                val collision = nim.getA2sCollisionResult(arena, worldIndex, collisionIndex)
+                if (collision.isSentinel()) break
+                showCollisionContacts(
+                    collision.contactCount,
+                    collision.contactPoints,
+                    a2aContactPointDust,
+                    a2sContactNormalDust
+                )
+                collisionIndex++
+            }
+        }
+    }
+
+    private fun showCollisionContacts(
+        contactCount: Int,
+        contactPoints: List<Nim.CollisionContactPoint>,
+        pointDustOptions: Particle.DustOptions,
+        normalDustOptions: Particle.DustOptions,
+    ) {
+        val clampedContactCount = minOf(contactCount, contactPoints.size)
+        for (contactIndex in 0 until clampedContactCount) {
+            val contact = contactPoints[contactIndex]
+            val point = contact.position
+            bukkitWorld.spawnParticle(
+                Particle.DUST,
+                point.x.toDouble(),
+                point.y.toDouble(),
+                point.z.toDouble(),
+                1,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                pointDustOptions,
+            )
+
+            val normalEnd = Vector3f(contact.normal).mul(contact.penetrationDepth).add(point)
+            drawParticleLine(
+                world = bukkitWorld,
+                startX = point.x.toDouble(),
+                startY = point.y.toDouble(),
+                startZ = point.z.toDouble(),
+                endX = normalEnd.x.toDouble(),
+                endY = normalEnd.y.toDouble(),
+                endZ = normalEnd.z.toDouble(),
+                interval = 0.15f,
+                particle = EdgeParticle.REDSTONE,
+                dustOptions = normalDustOptions,
+            )
+        }
     }
 
     fun bukkitTick() {

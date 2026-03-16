@@ -230,6 +230,10 @@ proc dimensions*(data: InternalData, handle: BodyHandle): F3 =
 proc aabb*(data: InternalData, handle: BodyHandle): FBB =
   result = data.cached_aabb[data.slot_to_dense[handle.slot]]
 
+proc body_handle_at_dense*(data: InternalData, dense_idx: int): BodyHandle =
+  let slot = data.dense_to_slot[dense_idx]
+  BodyHandle(slot: slot, generation: data.generation[slot])
+
 proc slot_count*(data: InternalData): int =
   data.slot_to_dense.len
 
@@ -252,6 +256,11 @@ proc cached_world_axes_ptr*(data: InternalData): ptr UncheckedArray[array[3, F3]
   if data.cached_world_axes.len == 0:
     return nil
   cast[ptr UncheckedArray[array[3, F3]]](unsafeAddr data.cached_world_axes[0])
+
+proc cached_aabb_ptr*(data: InternalData): ptr UncheckedArray[FBB] =
+  if data.cached_aabb.len == 0:
+    return nil
+  cast[ptr UncheckedArray[FBB]](unsafeAddr data.cached_aabb[0])
 
 proc cached_inverse_inertia_diag_ptr*(data: InternalData): ptr UncheckedArray[F3] =
   if data.cached_inverse_inertia_diag.len == 0:

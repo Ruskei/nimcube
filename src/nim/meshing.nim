@@ -2,18 +2,21 @@ import std/bitops
 import std/times
 import std/monotimes
 
+import dynamic_aabb_tree
 import physics_math
 
 const
-  chunk_width = 64
-  chunk_height = 384
+  chunk_width* = 64
+  chunk_height* = 384
+  chunk_mesh_min_y* = -64
 
 type
   ## y-z-x order, lsb is first bit
   ChunkBinaryData* = array[chunk_width * chunk_width * chunk_height div sizeof(uint64), uint64]
-  ChunkMesh = object
+  ChunkMesh* = object
     origin*: I3
     bbs*: seq[FBB] ## relative to origin
+    aabb_tree*: DynamicAabbTree[int]
 
 converter i3_to_f3*(v: V3[int]): F3 =
   (
@@ -112,14 +115,14 @@ proc build_exposed_rows(solid_rows: ptr PackedRows): seq[uint64] =
         exposed_y_neg or exposed_y_pos or
         exposed_z_neg or exposed_z_pos
 
-## returns index of chunk mesh in chunk_meshes
-proc greedy_mesh*(
+proc build_chunk_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
-): cint =
+): ChunkMesh =
   let start = get_mono_time()
 
   var bbs: seq[FBB]
+  var aabb_tree = init_dynamic_aabb_tree[int](fat_margin = 0'f32)
 
   let solid_rows = cast[ptr PackedRows](chunk_binary_data)
   var exposed_storage = build_exposed_rows(solid_rows)
@@ -152,21 +155,28 @@ proc greedy_mesh*(
         clear_box_from_exposed(exposed_rows, y_start, y_end, z_start, z_end, x_mask)
 
         let bb: FBB = (min: (x_start, y_start, z_start), max: (x_start + x_length, y_end + 1, z_end + 1))
+        discard aabb_tree.insert(bb, bbs.len)
         bbs.add bb
 
         seed_row_bits = exposed_rows[seed_row_index]
 
-  let idx = chunk_meshes.len
   let origin = (origin_x.int32, origin_y.int32, origin_z.int32)
-  let chunk_mesh = ChunkMesh(
+  result = ChunkMesh(
     origin: origin,
     bbs: move(bbs),
+    aabb_tree: move(aabb_tree),
   )
-
-  chunk_meshes.add chunk_mesh
 
   let finish = get_mono_time()
 
   echo "took=", in_milliseconds(finish - start), "ms"
 
+## returns index of chunk mesh in chunk_meshes
+proc greedy_mesh*(
+  origin_x, origin_y, origin_z: cint;
+  chunk_binary_data: ptr ChunkBinaryData,
+): cint =
+  var chunk_mesh = build_chunk_mesh(origin_x, origin_y, origin_z, chunk_binary_data)
+  let idx = chunk_meshes.len
+  chunk_meshes.add move(chunk_mesh)
   result = idx.cint

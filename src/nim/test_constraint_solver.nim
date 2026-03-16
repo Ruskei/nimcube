@@ -33,8 +33,8 @@ proc sync_body_inputs(pool: NarrowphasePool, data: InternalData) =
 
 proc dispatch_pair(fixture: var SolverFixture, dt: float32) =
   fixture.pool.sync_body_inputs(fixture.data)
-  fixture.pool.clear_broadphase_results()
-  fixture.pool.add_broadphase_result((fixture.handle_a, fixture.handle_b))
+  fixture.pool.clear_narrowphase_inputs()
+  fixture.pool.add_a2a_broadphase_result((fixture.handle_a, fixture.handle_b))
   fixture.pool.dispatch_narrowphase_and_wait()
   fixture.buffer.precompute_velocity_constraints(fixture.data, fixture.pool, dt)
 

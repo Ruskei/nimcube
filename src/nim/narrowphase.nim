@@ -20,14 +20,32 @@ type
     normal*: F3
     penetration_depth*: float32
 
-  CollisionManifold* = object
+  A2aCollisionManifold* = object
     contact_points*: array[4, ContactPoint]
     contact_count*: uint8
     body_a*: BodyHandle
     body_b*: BodyHandle
     manifold_id*: uint64
 
-  BroadphasePair* = tuple[a, b: BodyHandle]
+  A2sCollisionManifold* = object
+    contact_points*: array[4, ContactPoint]
+    contact_count*: uint8
+    body_a*: BodyHandle
+    manifold_id*: uint64
+
+  NarrowphaseResultKind* = enum
+    nrk_a2a
+    nrk_a2s
+
+  NarrowphaseResult* = object
+    case kind*: NarrowphaseResultKind
+    of nrk_a2a:
+      a2a*: A2aCollisionManifold
+    of nrk_a2s:
+      a2s*: A2sCollisionManifold
+
+  A2aBroadphasePair* = tuple[a, b: BodyHandle]
+  A2sBroadphaseHit* = tuple[body: BodyHandle, static_bb: FBB]
 
   NarrowphaseBodyInputs* = object
     slot_count*: int
@@ -37,19 +55,27 @@ type
     half_extents*: ptr UncheckedArray[F3]
     world_axes*: ptr UncheckedArray[array[3, F3]]
 
-  NarrowphaseJob* = object
-    start_idx*: int
-    end_idx*: int
-    broadphase_results*: ptr UncheckedArray[BroadphasePair]
-    body_inputs*: NarrowphaseBodyInputs
-
-  RawBroadphaseBuffer* = object
-    data*: ptr UncheckedArray[BroadphasePair]
+  RawA2aBroadphaseBuffer* = object
+    data*: ptr UncheckedArray[A2aBroadphasePair]
     len*: int
     capacity*: int
 
+  RawA2sBroadphaseBuffer* = object
+    data*: ptr UncheckedArray[A2sBroadphaseHit]
+    len*: int
+    capacity*: int
+
+  NarrowphaseJob* = object
+    start_idx*: int
+    end_idx*: int
+    a2a_broadphase_results*: ptr UncheckedArray[A2aBroadphasePair]
+    a2a_count*: int
+    a2s_broadphase_results*: ptr UncheckedArray[A2sBroadphaseHit]
+    a2s_count*: int
+    body_inputs*: NarrowphaseBodyInputs
+
   WorkerOutputBuffer* = object
-    data*: ptr UncheckedArray[CollisionManifold]
+    data*: ptr UncheckedArray[NarrowphaseResult]
     count*: int
     capacity*: int
 
@@ -64,7 +90,8 @@ type
     workers: seq[Thread[WorkerThreadArg]]
     worker_args: seq[WorkerThreadArg]
     worker_states: seq[NarrowphaseWorkerState]
-    broadphase_results*: RawBroadphaseBuffer
+    a2a_broadphase_results*: RawA2aBroadphaseBuffer
+    a2s_broadphase_results*: RawA2sBroadphaseBuffer
     lock: Lock
     work_ready: Cond
     work_done: Cond
@@ -163,6 +190,50 @@ proc load_body_obb(inputs: NarrowphaseBodyInputs, handle: BodyHandle, body: var 
     axis_is_usable(body.axes[0]) and
     axis_is_usable(body.axes[1]) and
     axis_is_usable(body.axes[2])
+
+proc load_static_body_obb(static_bb: FBB, body: var BodyObbView): bool =
+  let half_extents = 0.5'f32 * (static_bb.max - static_bb.min)
+  let center = static_bb.min + half_extents
+  body.center = center
+  body.half_extents = half_extents
+  body.axes = [
+    (1'f32, 0'f32, 0'f32),
+    (0'f32, 1'f32, 0'f32),
+    (0'f32, 0'f32, 1'f32),
+  ]
+  result =
+    body.center.is_finite and
+    body.half_extents.is_finite and
+    axis_is_usable(body.axes[0]) and
+    axis_is_usable(body.axes[1]) and
+    axis_is_usable(body.axes[2])
+
+proc ensure_shared_capacity[T](
+  data: var ptr UncheckedArray[T],
+  capacity: var int,
+  required_capacity: int,
+) =
+  if capacity >= required_capacity:
+    return
+
+  var next_capacity =
+    if capacity == 0:
+      1
+    else:
+      capacity * 2
+
+  if next_capacity < required_capacity:
+    next_capacity = required_capacity
+
+  let old_size = Natural(capacity * sizeof(T))
+  let new_size = Natural(next_capacity * sizeof(T))
+
+  if data == nil:
+    data = cast[ptr UncheckedArray[T]](allocShared0(new_size))
+  else:
+    data = cast[ptr UncheckedArray[T]](reallocShared0(data, old_size, new_size))
+
+  capacity = next_capacity
 
 proc consider_axis(
   best: var SatAxisHit,
@@ -433,12 +504,13 @@ proc write_reduced_contacts(
   candidates: array[max_clipped_vertices, ContactCandidate],
   candidate_count: int,
   normal: F3,
-  manifold: var CollisionManifold,
+  contact_points: var array[4, ContactPoint],
+  contact_count: var uint8,
 ) =
-  if candidate_count <= manifold.contact_points.len:
-    manifold.contact_count = candidate_count.uint8
+  if candidate_count <= contact_points.len:
+    contact_count = candidate_count.uint8
     for idx in 0 ..< candidate_count:
-      manifold.contact_points[idx] = ContactPoint(
+      contact_points[idx] = ContactPoint(
         position: candidates[idx].position,
         normal: normal,
         penetration_depth: candidates[idx].penetration_depth,
@@ -463,16 +535,24 @@ proc write_reduced_contacts(
   if selected[3] < 0:
     selected[3] = select_farthest_index(candidates, candidate_count, candidates[selected[2]].position, selected, 3)
 
-  manifold.contact_count = 4
+  contact_count = 4
   for idx in 0 ..< 4:
-    manifold.contact_points[idx] = ContactPoint(
+    contact_points[idx] = ContactPoint(
       position: candidates[selected[idx]].position,
       normal: normal,
       penetration_depth: candidates[selected[idx]].penetration_depth,
     )
 
-proc face_manifold_id(
-  pair: BroadphasePair,
+proc hash_fbb(seed: var uint64, bb: FBB) =
+  seed.hash_mix(cast[uint32](bb.min.x).uint64)
+  seed.hash_mix(cast[uint32](bb.min.y).uint64)
+  seed.hash_mix(cast[uint32](bb.min.z).uint64)
+  seed.hash_mix(cast[uint32](bb.max.x).uint64)
+  seed.hash_mix(cast[uint32](bb.max.y).uint64)
+  seed.hash_mix(cast[uint32](bb.max.z).uint64)
+
+proc a2a_face_manifold_id(
+  pair: A2aBroadphasePair,
   reference_is_a: bool,
   reference_axis_idx: int,
   reference_face_sign: float32,
@@ -490,11 +570,11 @@ proc face_manifold_id(
   result.hash_mix(incident_axis_idx.uint64)
   result.hash_mix(sign_code(incident_face_sign))
 
-proc build_face_manifold(
-  pair: BroadphasePair,
+proc a2a_build_face_manifold(
+  pair: A2aBroadphasePair,
   a, b: BodyObbView,
   hit: SatAxisHit,
-  manifold: var CollisionManifold,
+  manifold: var A2aCollisionManifold,
 ): bool =
   let reference_is_a = hit.kind == fk_face_a
   let reference_body = if reference_is_a: a else: b
@@ -553,7 +633,7 @@ proc build_face_manifold(
   if unique_count == 0:
     return false
 
-  manifold.manifold_id = face_manifold_id(
+  manifold.manifold_id = a2a_face_manifold_id(
     pair,
     reference_is_a,
     reference_axis_idx,
@@ -561,7 +641,13 @@ proc build_face_manifold(
     incident_face.axis_idx,
     incident_face.face_sign,
   )
-  write_reduced_contacts(unique_candidates, unique_count, reference_normal, manifold)
+  write_reduced_contacts(
+    unique_candidates,
+    unique_count,
+    reference_normal,
+    manifold.contact_points,
+    manifold.contact_count,
+  )
   result = manifold.contact_count > 0
 
 proc build_support_edge(body: BodyObbView, edge_axis_idx: int, support_direction: F3): SupportEdge =
@@ -623,8 +709,8 @@ proc closest_points_on_segments(
   closest_p = p0 + s * d1
   closest_q = q0 + t * d2
 
-proc edge_manifold_id(
-  pair: BroadphasePair,
+proc a2a_edge_manifold_id(
+  pair: A2aBroadphasePair,
   axis_idx_a: int,
   axis_idx_b: int,
   sign_mask_a: uint8,
@@ -641,11 +727,11 @@ proc edge_manifold_id(
   result.hash_mix(sign_mask_a.uint64)
   result.hash_mix(sign_mask_b.uint64)
 
-proc build_edge_manifold(
-  pair: BroadphasePair,
+proc a2a_build_edge_manifold(
+  pair: A2aBroadphasePair,
   a, b: BodyObbView,
   hit: SatAxisHit,
-  manifold: var CollisionManifold,
+  manifold: var A2aCollisionManifold,
 ): bool =
   let edge_a = build_support_edge(a, hit.axis_index_a, hit.normal)
   let edge_b = build_support_edge(b, hit.axis_index_b, -hit.normal)
@@ -669,7 +755,7 @@ proc build_edge_manifold(
     normal: contact_normal,
     penetration_depth: contact_depth,
   )
-  manifold.manifold_id = edge_manifold_id(
+  manifold.manifold_id = a2a_edge_manifold_id(
     pair,
     hit.axis_index_a,
     hit.axis_index_b,
@@ -678,10 +764,10 @@ proc build_edge_manifold(
   )
   true
 
-proc generate_cuboid_manifold(
-  pair: BroadphasePair,
+proc generate_a2a_cuboid_manifold(
+  pair: A2aBroadphasePair,
   inputs: NarrowphaseBodyInputs,
-  manifold: var CollisionManifold,
+  manifold: var A2aCollisionManifold,
 ): bool =
   var body_a: BodyObbView
   var body_b: BodyObbView
@@ -692,50 +778,209 @@ proc generate_cuboid_manifold(
   if not find_separating_axis(body_a, body_b, hit):
     return false
 
-  manifold = default(CollisionManifold)
+  manifold = default(A2aCollisionManifold)
   manifold.body_a = pair.a
   manifold.body_b = pair.b
 
   case hit.kind
   of fk_face_a, fk_face_b:
-    build_face_manifold(pair, body_a, body_b, hit, manifold)
+    a2a_build_face_manifold(pair, body_a, body_b, hit, manifold)
   of fk_edge_edge:
-    build_edge_manifold(pair, body_a, body_b, hit, manifold)
+    a2a_build_edge_manifold(pair, body_a, body_b, hit, manifold)
   else:
     false
 
-proc ensure_shared_capacity[T](
-  data: var ptr UncheckedArray[T],
-  capacity: var int,
-  required_capacity: int,
-) =
-  if capacity >= required_capacity:
-    return
+proc a2s_face_manifold_id(
+  body: BodyHandle,
+  static_bb: FBB,
+  reference_is_a: bool,
+  reference_axis_idx: int,
+  reference_face_sign: float32,
+  incident_axis_idx: int,
+  incident_face_sign: float32,
+): uint64 =
+  result = 0xCBF29CE484222325'u64
+  result.hash_mix(body.slot.uint64)
+  result.hash_mix(body.generation.uint64)
+  result.hash_fbb(static_bb)
+  result.hash_mix((if reference_is_a: 1'u64 else: 2'u64))
+  result.hash_mix(reference_axis_idx.uint64)
+  result.hash_mix(sign_code(reference_face_sign))
+  result.hash_mix(incident_axis_idx.uint64)
+  result.hash_mix(sign_code(incident_face_sign))
 
-  var next_capacity =
-    if capacity == 0:
-      1
+proc a2s_build_face_manifold(
+  body: BodyHandle,
+  static_bb: FBB,
+  a, b: BodyObbView,
+  hit: SatAxisHit,
+  manifold: var A2sCollisionManifold,
+): bool =
+  let reference_is_a = hit.kind == fk_face_a
+  let reference_body = if reference_is_a: a else: b
+  let incident_body = if reference_is_a: b else: a
+  let reference_axis_idx = if reference_is_a: hit.axis_index_a else: hit.axis_index_b
+  let reference_normal = if reference_is_a: hit.normal else: -hit.normal
+  let reference_face_sign =
+    if reference_body.axes[reference_axis_idx] ∙ reference_normal >= 0'f32:
+      1'f32
     else:
-      capacity * 2
+      -1'f32
+  let incident_face = choose_incident_face(incident_body, reference_normal)
 
-  if next_capacity < required_capacity:
-    next_capacity = required_capacity
+  let tangents = other_axes(reference_axis_idx)
+  let face_center =
+    reference_body.center +
+    reference_face_sign * reference_body.half_extents.component(reference_axis_idx) * reference_body.axes[reference_axis_idx]
+  let tangent_u = reference_body.axes[tangents[0]]
+  let tangent_v = reference_body.axes[tangents[1]]
+  let half_u = reference_body.half_extents.component(tangents[0])
+  let half_v = reference_body.half_extents.component(tangents[1])
 
-  let old_size = Natural(capacity * sizeof(T))
-  let new_size = Natural(next_capacity * sizeof(T))
+  var incident_vertices: array[4, F3]
+  build_face_vertices(incident_body, incident_face.axis_idx, incident_face.face_sign, incident_vertices)
 
-  if data == nil:
-    data = cast[ptr UncheckedArray[T]](allocShared0(new_size))
+  var polygon: VertexBuffer
+  polygon.count = incident_vertices.len
+  for idx in 0 ..< incident_vertices.len:
+    polygon.points[idx] = incident_vertices[idx]
+
+  let plane_u_pos = (face_center ∙ tangent_u) + half_u
+  let plane_u_neg = (-face_center ∙ tangent_u) + half_u
+  let plane_v_pos = (face_center ∙ tangent_v) + half_v
+  let plane_v_neg = (-face_center ∙ tangent_v) + half_v
+
+  polygon = clip_polygon_against_plane(polygon, tangent_u, plane_u_pos)
+  polygon = clip_polygon_against_plane(polygon, -tangent_u, plane_u_neg)
+  polygon = clip_polygon_against_plane(polygon, tangent_v, plane_v_pos)
+  polygon = clip_polygon_against_plane(polygon, -tangent_v, plane_v_neg)
+
+  var candidates: array[max_clipped_vertices, ContactCandidate]
+  var candidate_count = 0
+  for idx in 0 ..< polygon.count:
+    let signed_distance = (polygon.points[idx] - face_center) ∙ reference_normal
+    let penetration_depth = -signed_distance
+    if not penetration_depth.is_finite or penetration_depth <= 0'f32:
+      continue
+    candidates[candidate_count] = ContactCandidate(
+      position: polygon.points[idx],
+      penetration_depth: penetration_depth,
+    )
+    inc candidate_count
+
+  var unique_candidates: array[max_clipped_vertices, ContactCandidate]
+  let unique_count = unique_contact_candidates(candidates, candidate_count, unique_candidates)
+  if unique_count == 0:
+    return false
+
+  manifold.manifold_id = a2s_face_manifold_id(
+    body,
+    static_bb,
+    reference_is_a,
+    reference_axis_idx,
+    reference_face_sign,
+    incident_face.axis_idx,
+    incident_face.face_sign,
+  )
+  write_reduced_contacts(
+    unique_candidates,
+    unique_count,
+    reference_normal,
+    manifold.contact_points,
+    manifold.contact_count,
+  )
+  result = manifold.contact_count > 0
+
+proc a2s_edge_manifold_id(
+  body: BodyHandle,
+  static_bb: FBB,
+  axis_idx_a: int,
+  axis_idx_b: int,
+  sign_mask_a: uint8,
+  sign_mask_b: uint8,
+): uint64 =
+  result = 0xCBF29CE484222325'u64
+  result.hash_mix(body.slot.uint64)
+  result.hash_mix(body.generation.uint64)
+  result.hash_fbb(static_bb)
+  result.hash_mix(3'u64)
+  result.hash_mix(axis_idx_a.uint64)
+  result.hash_mix(axis_idx_b.uint64)
+  result.hash_mix(sign_mask_a.uint64)
+  result.hash_mix(sign_mask_b.uint64)
+
+proc a2s_build_edge_manifold(
+  body: BodyHandle,
+  static_bb: FBB,
+  a, b: BodyObbView,
+  hit: SatAxisHit,
+  manifold: var A2sCollisionManifold,
+): bool =
+  let edge_a = build_support_edge(a, hit.axis_index_a, hit.normal)
+  let edge_b = build_support_edge(b, hit.axis_index_b, -hit.normal)
+
+  var point_a: F3
+  var point_b: F3
+  closest_points_on_segments(edge_a.p0, edge_a.p1, edge_b.p0, edge_b.p1, point_a, point_b)
+
+  let contact_delta = point_a - point_b
+  var contact_normal = -hit.normal
+  var contact_depth = hit.penetration
+  if axis_is_usable(contact_delta):
+    contact_normal = normalized(contact_delta)
+    contact_depth = contact_delta.length
+  elif not axis_is_usable(contact_normal):
+    return false
+
+  manifold.contact_count = 1
+  manifold.contact_points[0] = ContactPoint(
+    position: point_b,
+    normal: contact_normal,
+    penetration_depth: contact_depth,
+  )
+  manifold.manifold_id = a2s_edge_manifold_id(
+    body,
+    static_bb,
+    hit.axis_index_a,
+    hit.axis_index_b,
+    edge_a.sign_mask,
+    edge_b.sign_mask,
+  )
+  true
+
+proc generate_a2s_cuboid_manifold(
+  hit: A2sBroadphaseHit,
+  inputs: NarrowphaseBodyInputs,
+  manifold: var A2sCollisionManifold,
+): bool =
+  var body_a: BodyObbView
+  var body_b: BodyObbView
+  if not load_body_obb(inputs, hit.body, body_a) or not load_static_body_obb(hit.static_bb, body_b):
+    return false
+
+  var sat_hit: SatAxisHit
+  if not find_separating_axis(body_a, body_b, sat_hit):
+    return false
+
+  manifold = default(A2sCollisionManifold)
+  manifold.body_a = hit.body
+
+  case sat_hit.kind
+  of fk_face_a, fk_face_b:
+    a2s_build_face_manifold(hit.body, hit.static_bb, body_a, body_b, sat_hit, manifold)
+  of fk_edge_edge:
+    a2s_build_edge_manifold(hit.body, hit.static_bb, body_a, body_b, sat_hit, manifold)
   else:
-    data = cast[ptr UncheckedArray[T]](reallocShared0(data, old_size, new_size))
-
-  capacity = next_capacity
+    false
 
 proc reset_worker_state(state: var NarrowphaseWorkerState) =
   state.job = NarrowphaseJob(
     start_idx: 0,
     end_idx: 0,
-    broadphase_results: nil,
+    a2a_broadphase_results: nil,
+    a2a_count: 0,
+    a2s_broadphase_results: nil,
+    a2s_count: 0,
     body_inputs: default(NarrowphaseBodyInputs),
   )
   state.output.count = 0
@@ -771,13 +1016,24 @@ proc narrowphase_worker(arg: WorkerThreadArg) {.thread, nimcall.} =
     if not should_process:
       continue
 
-    for pair_idx in job.start_idx ..< job.end_idx:
-      let pair = job.broadphase_results[pair_idx]
-      var manifold: CollisionManifold
-      if generate_cuboid_manifold(pair, job.body_inputs, manifold):
-        let output_count = pool[].worker_states[worker_idx].output.count
-        pool[].worker_states[worker_idx].output.data[output_count] = manifold
-        inc pool[].worker_states[worker_idx].output.count
+    let output = addr pool[].worker_states[worker_idx].output
+
+    for job_idx in job.start_idx ..< job.end_idx:
+      if job_idx < job.a2a_count:
+        let pair = job.a2a_broadphase_results[job_idx]
+        var manifold: A2aCollisionManifold
+        if generate_a2a_cuboid_manifold(pair, job.body_inputs, manifold):
+          ensure_shared_capacity(output[].data, output[].capacity, output[].count + 1)
+          output[].data[output[].count] = NarrowphaseResult(kind: nrk_a2a, a2a: manifold)
+          inc output[].count
+      else:
+        let a2s_idx = job_idx - job.a2a_count
+        let hit = job.a2s_broadphase_results[a2s_idx]
+        var manifold: A2sCollisionManifold
+        if generate_a2s_cuboid_manifold(hit, job.body_inputs, manifold):
+          ensure_shared_capacity(output[].data, output[].capacity, output[].count + 1)
+          output[].data[output[].count] = NarrowphaseResult(kind: nrk_a2s, a2s: manifold)
+          inc output[].count
 
     acquire(pool[].lock)
     try:
@@ -829,18 +1085,25 @@ proc deinit_narrowphase_pool*(pool: NarrowphasePool) =
       pool.worker_states[worker_idx].output.capacity = 0
       pool.worker_states[worker_idx].output.count = 0
 
-  if pool.broadphase_results.data != nil:
-    deallocShared(pool.broadphase_results.data)
-    pool.broadphase_results.data = nil
-    pool.broadphase_results.capacity = 0
-    pool.broadphase_results.len = 0
+  if pool.a2a_broadphase_results.data != nil:
+    deallocShared(pool.a2a_broadphase_results.data)
+    pool.a2a_broadphase_results.data = nil
+    pool.a2a_broadphase_results.capacity = 0
+    pool.a2a_broadphase_results.len = 0
+
+  if pool.a2s_broadphase_results.data != nil:
+    deallocShared(pool.a2s_broadphase_results.data)
+    pool.a2s_broadphase_results.data = nil
+    pool.a2s_broadphase_results.capacity = 0
+    pool.a2s_broadphase_results.len = 0
 
   deinitCond(pool.work_ready)
   deinitCond(pool.work_done)
   deinitLock(pool.lock)
 
-proc clear_broadphase_results*(pool: NarrowphasePool) =
-  pool.broadphase_results.len = 0
+proc clear_narrowphase_inputs*(pool: NarrowphasePool) =
+  pool.a2a_broadphase_results.len = 0
+  pool.a2s_broadphase_results.len = 0
 
 proc set_body_inputs*(
   pool: NarrowphasePool,
@@ -860,15 +1123,25 @@ proc set_body_inputs*(
     world_axes: world_axes,
   )
 
-proc add_broadphase_result*(pool: NarrowphasePool, pair: BroadphasePair) =
-  let next_len = pool.broadphase_results.len + 1
+proc add_a2a_broadphase_result*(pool: NarrowphasePool, pair: A2aBroadphasePair) =
+  let next_len = pool.a2a_broadphase_results.len + 1
   ensure_shared_capacity(
-    pool.broadphase_results.data,
-    pool.broadphase_results.capacity,
+    pool.a2a_broadphase_results.data,
+    pool.a2a_broadphase_results.capacity,
     next_len,
   )
-  pool.broadphase_results.data[pool.broadphase_results.len] = pair
-  pool.broadphase_results.len = next_len
+  pool.a2a_broadphase_results.data[pool.a2a_broadphase_results.len] = pair
+  pool.a2a_broadphase_results.len = next_len
+
+proc add_a2s_broadphase_result*(pool: NarrowphasePool, hit: A2sBroadphaseHit) =
+  let next_len = pool.a2s_broadphase_results.len + 1
+  ensure_shared_capacity(
+    pool.a2s_broadphase_results.data,
+    pool.a2s_broadphase_results.capacity,
+    next_len,
+  )
+  pool.a2s_broadphase_results.data[pool.a2s_broadphase_results.len] = hit
+  pool.a2s_broadphase_results.len = next_len
 
 proc dispatch_narrowphase_and_wait*(pool: NarrowphasePool) =
   acquire(pool.lock)
@@ -876,24 +1149,28 @@ proc dispatch_narrowphase_and_wait*(pool: NarrowphasePool) =
     for worker_idx in 0 ..< pool.worker_states.len:
       pool.worker_states[worker_idx].reset_worker_state()
 
-    if pool.broadphase_results.len == 0:
+    let total_jobs = pool.a2a_broadphase_results.len + pool.a2s_broadphase_results.len
+    if total_jobs == 0:
       pool.active_workers = 0
       pool.finished_workers = 0
       return
 
-    pool.active_workers = min(pool.worker_count, pool.broadphase_results.len)
+    pool.active_workers = min(pool.worker_count, total_jobs)
     pool.finished_workers = 0
 
-    let base_chunk_size = pool.broadphase_results.len div pool.active_workers
-    let extra_pairs = pool.broadphase_results.len mod pool.active_workers
+    let base_chunk_size = total_jobs div pool.active_workers
+    let extra_jobs = total_jobs mod pool.active_workers
 
     for worker_idx in 0 ..< pool.active_workers:
-      let start_idx = worker_idx * base_chunk_size + min(worker_idx, extra_pairs)
-      let end_idx = start_idx + base_chunk_size + (if worker_idx < extra_pairs: 1 else: 0)
+      let start_idx = worker_idx * base_chunk_size + min(worker_idx, extra_jobs)
+      let end_idx = start_idx + base_chunk_size + (if worker_idx < extra_jobs: 1 else: 0)
       pool.worker_states[worker_idx].job = NarrowphaseJob(
         start_idx: start_idx,
         end_idx: end_idx,
-        broadphase_results: pool.broadphase_results.data,
+        a2a_broadphase_results: pool.a2a_broadphase_results.data,
+        a2a_count: pool.a2a_broadphase_results.len,
+        a2s_broadphase_results: pool.a2s_broadphase_results.data,
+        a2s_count: pool.a2s_broadphase_results.len,
         body_inputs: pool.body_inputs,
       )
       ensure_shared_capacity(
@@ -910,15 +1187,25 @@ proc dispatch_narrowphase_and_wait*(pool: NarrowphasePool) =
   finally:
     release(pool.lock)
 
-proc broadphase_result_count*(pool: NarrowphasePool): int =
-  pool.broadphase_results.len
+proc a2a_broadphase_result_count*(pool: NarrowphasePool): int =
+  pool.a2a_broadphase_results.len
 
-proc broadphase_result_capacity*(pool: NarrowphasePool): int =
-  pool.broadphase_results.capacity
+proc a2a_broadphase_result_capacity*(pool: NarrowphasePool): int =
+  pool.a2a_broadphase_results.capacity
 
-proc broadphase_result_at*(pool: NarrowphasePool, idx: int): BroadphasePair =
-  doAssert idx >= 0 and idx < pool.broadphase_results.len
-  pool.broadphase_results.data[idx]
+proc a2a_broadphase_result_at*(pool: NarrowphasePool, idx: int): A2aBroadphasePair =
+  doAssert idx >= 0 and idx < pool.a2a_broadphase_results.len
+  pool.a2a_broadphase_results.data[idx]
+
+proc a2s_broadphase_result_count*(pool: NarrowphasePool): int =
+  pool.a2s_broadphase_results.len
+
+proc a2s_broadphase_result_capacity*(pool: NarrowphasePool): int =
+  pool.a2s_broadphase_results.capacity
+
+proc a2s_broadphase_result_at*(pool: NarrowphasePool, idx: int): A2sBroadphaseHit =
+  doAssert idx >= 0 and idx < pool.a2s_broadphase_results.len
+  pool.a2s_broadphase_results.data[idx]
 
 proc worker_output_count*(pool: NarrowphasePool, worker_idx: int): int =
   if worker_idx < 0 or worker_idx >= pool.worker_states.len:
@@ -930,7 +1217,7 @@ proc worker_output_capacity*(pool: NarrowphasePool, worker_idx: int): int =
     return 0
   pool.worker_states[worker_idx].output.capacity
 
-proc worker_output_at*(pool: NarrowphasePool, worker_idx: int, manifold_idx: int): CollisionManifold =
+proc worker_output_at*(pool: NarrowphasePool, worker_idx: int, manifold_idx: int): NarrowphaseResult =
   doAssert worker_idx >= 0 and worker_idx < pool.worker_states.len
   doAssert manifold_idx >= 0 and manifold_idx < pool.worker_states[worker_idx].output.count
   pool.worker_states[worker_idx].output.data[manifold_idx]
