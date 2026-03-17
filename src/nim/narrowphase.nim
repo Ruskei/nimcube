@@ -160,7 +160,7 @@ proc other_axes(axis_idx: int): array[2, int] =
     raise newException(IndexDefect, "face axis index out of range")
 
 proc axis_is_usable(axis: F3): bool =
-  axis.is_finite and axis.length_squared > axis_epsilon * axis_epsilon
+  axis.length_squared > axis_epsilon * axis_epsilon and axis.is_finite
 
 proc support_radius(body: BodyObbView, axis: F3): float32 =
   abs(body.axes[0] ∙ axis) * body.half_extents.x +
@@ -184,12 +184,7 @@ proc load_body_obb(inputs: NarrowphaseBodyInputs, handle: BodyHandle, body: var 
   body.center = inputs.centers[dense_idx]
   body.half_extents = inputs.half_extents[dense_idx]
   body.axes = inputs.world_axes[dense_idx]
-  result =
-    body.center.is_finite and
-    body.half_extents.is_finite and
-    axis_is_usable(body.axes[0]) and
-    axis_is_usable(body.axes[1]) and
-    axis_is_usable(body.axes[2])
+  result = true
 
 proc load_static_body_obb(static_bb: FBB, body: var BodyObbView): bool =
   let half_extents = 0.5'f32 * (static_bb.max - static_bb.min)

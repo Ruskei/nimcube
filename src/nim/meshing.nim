@@ -13,7 +13,7 @@ const
 type
   ## y-z-x order, lsb is first bit
   ChunkBinaryData* = array[chunk_width * chunk_width * chunk_height div sizeof(uint64), uint64]
-  ChunkMesh* = object
+  ChunkMesh* = ref object
     origin*: I3
     bbs*: seq[FBB] ## relative to origin
     aabb_tree*: DynamicAabbTree[int]

@@ -78,12 +78,12 @@ proc append_constraints_from_a2a_manifold(
 
   for contact_idx in 0 ..< manifold.contact_count.int:
     let contact = manifold.contact_points[contact_idx]
-    if not contact.normal.is_finite or contact.normal.length_squared <= constraint_epsilon * constraint_epsilon:
+    if contact.normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
     # A2A manifolds store the contact point on body B and the penetration direction from body B toward body A.
     let normal = -normalized(contact.normal)
-    if not normal.is_finite or normal.length_squared <= constraint_epsilon * constraint_epsilon:
+    if normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
     let penetration_depth = max(contact.penetration_depth, 0'f32)
@@ -153,11 +153,11 @@ proc append_constraints_from_a2s_manifold(
 
   for contact_idx in 0 ..< manifold.contact_count.int:
     let contact = manifold.contact_points[contact_idx]
-    if not contact.normal.is_finite or contact.normal.length_squared <= constraint_epsilon * constraint_epsilon:
+    if contact.normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
     let normal = -normalized(contact.normal)
-    if not normal.is_finite or normal.length_squared <= constraint_epsilon * constraint_epsilon:
+    if normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
     let penetration_depth = max(contact.penetration_depth, 0'f32)
@@ -261,7 +261,7 @@ proc solve_a2a_velocity_constraints_iteration*(
       sor * constraint[].effective_mass * (normal_velocity - constraint[].bias_velocity)
     let new_impulse = max(candidate_impulse, 0'f32)
     let delta_impulse = new_impulse - constraint[].accumulated_impulse
-    if abs(delta_impulse) <= constraint_epsilon or not delta_impulse.is_finite:
+    if abs(delta_impulse) <= constraint_epsilon:
       continue
 
     constraint[].accumulated_impulse = new_impulse
@@ -289,12 +289,7 @@ proc solve_a2s_velocity_constraints_iteration*(
       sor * constraint[].effective_mass * (normal_velocity - constraint[].bias_velocity)
     let new_impulse = max(candidate_impulse, 0'f32)
     let delta_impulse = new_impulse - constraint[].accumulated_impulse
-    if abs(delta_impulse) <= constraint_epsilon or not delta_impulse.is_finite:
-      # echo "  abs(delta_impulse) <= constraint_epsilon or not delta_impulse.is_finite"
-      # echo "  normal_velocity=", normal_velocity
-      # echo "  candidate_impulse=", candidate_impulse
-      # echo "  constraint[].accumulated_impulse=", constraint[].accumulated_impulse
-      # echo "  delta_impulse=", delta_impulse
+    if abs(delta_impulse) <= constraint_epsilon:
       continue
 
     constraint[].accumulated_impulse = new_impulse

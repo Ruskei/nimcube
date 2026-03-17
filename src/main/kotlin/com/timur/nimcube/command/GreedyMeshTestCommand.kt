@@ -38,6 +38,8 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
                 ).also { it.init() }
             }
         var added = false
+        var minX = 0
+        var minZ = 0
         val totalDuration = measureTime {
             val serverLevel = (sender.world as CraftWorld).handle
 
@@ -45,8 +47,8 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
                 val binarySegment = arena.allocate(CHUNK_BINARY_DATA_SIZE.toLong())
                 val chunkX = Math.floorDiv(sender.location.blockX, PHYSICS_CHUNK_WIDTH)
                 val chunkZ = Math.floorDiv(sender.location.blockZ, PHYSICS_CHUNK_WIDTH)
-                val minX = chunkX * PHYSICS_CHUNK_WIDTH
-                val minZ = chunkZ * PHYSICS_CHUNK_WIDTH
+                minX = chunkX * PHYSICS_CHUNK_WIDTH
+                minZ = chunkZ * PHYSICS_CHUNK_WIDTH
 
                 val bp = BlockPos(0, 0, 0).mutable()
                 for (y in 0..<CHUNK_HEIGHT)
@@ -69,7 +71,7 @@ class GreedyMeshTestCommand(val plugin: Nimcube) : CommandExecutor {
             }
         }
 
-        sender.sendMessage("chunk mesh added=$added in $totalDuration")
+        sender.sendMessage("chunk mesh added=$added in $totalDuration from ($minX, $minZ)")
         println("Total duration: $totalDuration")
 
         return true
