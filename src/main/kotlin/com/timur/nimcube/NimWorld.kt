@@ -8,6 +8,7 @@ import org.bukkit.scheduler.BukkitTask
 import org.joml.Vector3f
 import java.lang.foreign.Arena
 import java.util.concurrent.ConcurrentLinkedDeque
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.round
 import kotlin.time.measureTime
 
@@ -20,6 +21,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
 
     val nim = plugin.nim
     val worldIndex = nim.createWorld(dt, acceleration)
+    val physicsBlocked = AtomicBoolean(false)
     var physicsThread: BukkitTask? = null
     var bukkitThread: BukkitTask? = null
     var physicsFrozen = false
@@ -33,11 +35,13 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     }
 
     fun physicsTick() {
+        if (!physicsBlocked.compareAndSet(false, true)) return
         if (!physicsFrozen) {
             advancePhysicsSubsteps(physicsSubstepsPerTick)
         }
 
 //        renderPhysicsDebug()
+        physicsBlocked.set(false)
     }
 
     fun togglePhysicsFrozen(): Boolean {
