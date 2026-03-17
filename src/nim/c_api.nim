@@ -29,12 +29,10 @@ type
     contact_count: int32
     body_a_slot, body_a_generation: int32
     body_b_slot, body_b_generation: int32
-    manifold_id: uint64
     contact_points: array[4, C_CollisionContactPoint]
   C_A2sCollisionManifold {.bycopy.} = object
     contact_count: int32
     body_a_slot, body_a_generation: int32
-    manifold_id: uint64
     contact_points: array[4, C_CollisionContactPoint]
 
 converter d3_to_c(v: D3): C_D3 =
@@ -79,7 +77,6 @@ proc invalid_collision_manifold(): C_CollisionManifold =
     body_a_generation: 0'i32,
     body_b_slot: -1'i32,
     body_b_generation: 0'i32,
-    manifold_id: 0'u64,
   )
 
 proc invalid_a2s_collision_manifold(): C_A2sCollisionManifold =
@@ -87,7 +84,6 @@ proc invalid_a2s_collision_manifold(): C_A2sCollisionManifold =
     contact_count: -1'i32,
     body_a_slot: -1'i32,
     body_a_generation: 0'i32,
-    manifold_id: 0'u64,
   )
 
 proc to_c(contact_point: ContactPoint): C_CollisionContactPoint =
@@ -105,7 +101,6 @@ proc to_c(manifold: A2aCollisionManifold): C_CollisionManifold =
   result.body_a_generation = manifold.body_a.generation.int32
   result.body_b_slot = manifold.body_b.slot.int32
   result.body_b_generation = manifold.body_b.generation.int32
-  result.manifold_id = manifold.manifold_id
   for idx in 0 ..< manifold.contact_points.len:
     result.contact_points[idx] = manifold.contact_points[idx].to_c()
 
@@ -113,7 +108,6 @@ proc to_c(manifold: A2sCollisionManifold): C_A2sCollisionManifold =
   result.contact_count = manifold.contact_count.int32
   result.body_a_slot = manifold.body_a.slot.int32
   result.body_a_generation = manifold.body_a.generation.int32
-  result.manifold_id = manifold.manifold_id
   for idx in 0 ..< manifold.contact_points.len:
     result.contact_points[idx] = manifold.contact_points[idx].to_c()
 

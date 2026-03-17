@@ -25,13 +25,11 @@ type
     contact_count*: uint8
     body_a*: BodyHandle
     body_b*: BodyHandle
-    manifold_id*: uint64
 
   A2sCollisionManifold* = object
     contact_points*: array[4, ContactPoint]
     contact_count*: uint8
     body_a*: BodyHandle
-    manifold_id*: uint64
 
   NarrowphaseResultKind* = enum
     nrk_a2a
@@ -138,15 +136,6 @@ type
     p0: F3
     p1: F3
     sign_mask: uint8
-
-proc hash_mix(seed: var uint64, value: uint64) =
-  seed = seed xor (value + 0x9E3779B97F4A7C15'u64 + (seed shl 6) + (seed shr 2))
-
-proc sign_code(sign: float32): uint64 =
-  if sign >= 0'f32:
-    1'u64
-  else:
-    0'u64
 
 proc other_axes(axis_idx: int): array[2, int] =
   case axis_idx
@@ -538,35 +527,7 @@ proc write_reduced_contacts(
       penetration_depth: candidates[selected[idx]].penetration_depth,
     )
 
-proc hash_fbb(seed: var uint64, bb: FBB) =
-  seed.hash_mix(cast[uint32](bb.min.x).uint64)
-  seed.hash_mix(cast[uint32](bb.min.y).uint64)
-  seed.hash_mix(cast[uint32](bb.min.z).uint64)
-  seed.hash_mix(cast[uint32](bb.max.x).uint64)
-  seed.hash_mix(cast[uint32](bb.max.y).uint64)
-  seed.hash_mix(cast[uint32](bb.max.z).uint64)
-
-proc a2a_face_manifold_id(
-  pair: A2aBroadphasePair,
-  reference_is_a: bool,
-  reference_axis_idx: int,
-  reference_face_sign: float32,
-  incident_axis_idx: int,
-  incident_face_sign: float32,
-): uint64 =
-  result = 0xCBF29CE484222325'u64
-  result.hash_mix(pair.a.slot.uint64)
-  result.hash_mix(pair.a.generation.uint64)
-  result.hash_mix(pair.b.slot.uint64)
-  result.hash_mix(pair.b.generation.uint64)
-  result.hash_mix((if reference_is_a: 1'u64 else: 2'u64))
-  result.hash_mix(reference_axis_idx.uint64)
-  result.hash_mix(sign_code(reference_face_sign))
-  result.hash_mix(incident_axis_idx.uint64)
-  result.hash_mix(sign_code(incident_face_sign))
-
 proc a2a_build_face_manifold(
-  pair: A2aBroadphasePair,
   a, b: BodyObbView,
   hit: SatAxisHit,
   manifold: var A2aCollisionManifold,
@@ -628,14 +589,6 @@ proc a2a_build_face_manifold(
   if unique_count == 0:
     return false
 
-  manifold.manifold_id = a2a_face_manifold_id(
-    pair,
-    reference_is_a,
-    reference_axis_idx,
-    reference_face_sign,
-    incident_face.axis_idx,
-    incident_face.face_sign,
-  )
   write_reduced_contacts(
     unique_candidates,
     unique_count,
@@ -709,26 +662,7 @@ proc closest_points_on_segments(
   closest_p = p0 + s * d1
   closest_q = q0 + t * d2
 
-proc a2a_edge_manifold_id(
-  pair: A2aBroadphasePair,
-  axis_idx_a: int,
-  axis_idx_b: int,
-  sign_mask_a: uint8,
-  sign_mask_b: uint8,
-): uint64 =
-  result = 0xCBF29CE484222325'u64
-  result.hash_mix(pair.a.slot.uint64)
-  result.hash_mix(pair.a.generation.uint64)
-  result.hash_mix(pair.b.slot.uint64)
-  result.hash_mix(pair.b.generation.uint64)
-  result.hash_mix(3'u64)
-  result.hash_mix(axis_idx_a.uint64)
-  result.hash_mix(axis_idx_b.uint64)
-  result.hash_mix(sign_mask_a.uint64)
-  result.hash_mix(sign_mask_b.uint64)
-
 proc a2a_build_edge_manifold(
-  pair: A2aBroadphasePair,
   a, b: BodyObbView,
   hit: SatAxisHit,
   manifold: var A2aCollisionManifold,
@@ -755,13 +689,6 @@ proc a2a_build_edge_manifold(
     normal: contact_normal,
     penetration_depth: contact_depth,
   )
-  manifold.manifold_id = a2a_edge_manifold_id(
-    pair,
-    hit.axis_index_a,
-    hit.axis_index_b,
-    edge_a.sign_mask,
-    edge_b.sign_mask,
-  )
   true
 
 proc generate_a2a_cuboid_manifold(
@@ -784,34 +711,13 @@ proc generate_a2a_cuboid_manifold(
 
   case hit.kind
   of fk_face_a, fk_face_b:
-    a2a_build_face_manifold(pair, body_a, body_b, hit, manifold)
+    a2a_build_face_manifold(body_a, body_b, hit, manifold)
   of fk_edge_edge:
-    a2a_build_edge_manifold(pair, body_a, body_b, hit, manifold)
+    a2a_build_edge_manifold(body_a, body_b, hit, manifold)
   else:
     false
 
-proc a2s_face_manifold_id(
-  body: BodyHandle,
-  static_bb: FBB,
-  reference_is_a: bool,
-  reference_axis_idx: int,
-  reference_face_sign: float32,
-  incident_axis_idx: int,
-  incident_face_sign: float32,
-): uint64 =
-  result = 0xCBF29CE484222325'u64
-  result.hash_mix(body.slot.uint64)
-  result.hash_mix(body.generation.uint64)
-  result.hash_fbb(static_bb)
-  result.hash_mix((if reference_is_a: 1'u64 else: 2'u64))
-  result.hash_mix(reference_axis_idx.uint64)
-  result.hash_mix(sign_code(reference_face_sign))
-  result.hash_mix(incident_axis_idx.uint64)
-  result.hash_mix(sign_code(incident_face_sign))
-
 proc a2s_build_face_manifold(
-  body: BodyHandle,
-  static_bb: FBB,
   a, b: BodyObbView,
   hit: SatAxisHit,
   manifold: var A2sCollisionManifold,
@@ -873,16 +779,6 @@ proc a2s_build_face_manifold(
   if unique_count == 0:
     return false
 
-  manifold.manifold_id = a2s_face_manifold_id(
-    body,
-    static_bb,
-    reference_is_a,
-    reference_axis_idx,
-    reference_face_sign,
-    incident_face.axis_idx,
-    incident_face.face_sign,
-  )
-
   write_reduced_contacts(
     unique_candidates,
     unique_count,
@@ -897,27 +793,7 @@ proc a2s_build_face_manifold(
       manifold.contact_points[idx].normal = -manifold.contact_points[idx].normal
   result = manifold.contact_count > 0
 
-proc a2s_edge_manifold_id(
-  body: BodyHandle,
-  static_bb: FBB,
-  axis_idx_a: int,
-  axis_idx_b: int,
-  sign_mask_a: uint8,
-  sign_mask_b: uint8,
-): uint64 =
-  result = 0xCBF29CE484222325'u64
-  result.hash_mix(body.slot.uint64)
-  result.hash_mix(body.generation.uint64)
-  result.hash_fbb(static_bb)
-  result.hash_mix(3'u64)
-  result.hash_mix(axis_idx_a.uint64)
-  result.hash_mix(axis_idx_b.uint64)
-  result.hash_mix(sign_mask_a.uint64)
-  result.hash_mix(sign_mask_b.uint64)
-
 proc a2s_build_edge_manifold(
-  body: BodyHandle,
-  static_bb: FBB,
   a, b: BodyObbView,
   hit: SatAxisHit,
   manifold: var A2sCollisionManifold,
@@ -944,14 +820,6 @@ proc a2s_build_edge_manifold(
     normal: contact_normal,
     penetration_depth: contact_depth,
   )
-  manifold.manifold_id = a2s_edge_manifold_id(
-    body,
-    static_bb,
-    hit.axis_index_a,
-    hit.axis_index_b,
-    edge_a.sign_mask,
-    edge_b.sign_mask,
-  )
   true
 
 proc generate_a2s_cuboid_manifold(
@@ -973,9 +841,9 @@ proc generate_a2s_cuboid_manifold(
 
   case sat_hit.kind
   of fk_face_a, fk_face_b:
-    a2s_build_face_manifold(hit.body, hit.static_bb, body_a, body_b, sat_hit, manifold)
+    a2s_build_face_manifold(body_a, body_b, sat_hit, manifold)
   of fk_edge_edge:
-    a2s_build_edge_manifold(hit.body, hit.static_bb, body_a, body_b, sat_hit, manifold)
+    a2s_build_edge_manifold(body_a, body_b, sat_hit, manifold)
   else:
     false
 

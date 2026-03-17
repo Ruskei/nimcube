@@ -137,7 +137,6 @@ class Nim(plugin: Nimcube) {
         val contactCount: Int,
         val bodyA: BodyHandle,
         val bodyB: BodyHandle,
-        val manifoldId: Long,
         val contactPoints: List<CollisionContactPoint>,
     ) {
         fun isSentinel(): Boolean =
@@ -146,7 +145,6 @@ class Nim(plugin: Nimcube) {
             bodyA.generation == 0 &&
             bodyB.slot == -1 &&
             bodyB.generation == 0 &&
-            manifoldId == 0L &&
             contactPoints.all {
                 it.position.x == 0f &&
                 it.position.y == 0f &&
@@ -161,14 +159,12 @@ class Nim(plugin: Nimcube) {
     data class A2sCollisionResult(
         val contactCount: Int,
         val bodyA: BodyHandle,
-        val manifoldId: Long,
         val contactPoints: List<CollisionContactPoint>,
     ) {
         fun isSentinel(): Boolean =
             contactCount == -1 &&
             bodyA.slot == -1 &&
             bodyA.generation == 0 &&
-            manifoldId == 0L &&
             contactPoints.all {
                 it.position.x == 0f &&
                 it.position.y == 0f &&
@@ -203,16 +199,12 @@ class Nim(plugin: Nimcube) {
         ValueLayout.JAVA_INT.withName("bodyAGeneration"),
         ValueLayout.JAVA_INT.withName("bodyBSlot"),
         ValueLayout.JAVA_INT.withName("bodyBGeneration"),
-        MemoryLayout.paddingLayout(4),
-        ValueLayout.JAVA_LONG.withName("manifoldId"),
         MemoryLayout.sequenceLayout(4, C_CollisionContactPoint).withName("contactPoints"),
     )
     val C_A2sCollisionManifold = MemoryLayout.structLayout(
         ValueLayout.JAVA_INT.withName("contactCount"),
         ValueLayout.JAVA_INT.withName("bodyASlot"),
         ValueLayout.JAVA_INT.withName("bodyAGeneration"),
-        MemoryLayout.paddingLayout(4),
-        ValueLayout.JAVA_LONG.withName("manifoldId"),
         MemoryLayout.sequenceLayout(4, C_CollisionContactPoint).withName("contactPoints"),
     )
 
@@ -464,7 +456,7 @@ class Nim(plugin: Nimcube) {
     fun getA2aCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2aCollisionResult {
         val segment = getA2aCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
-        val contactPointBaseOffset = 32L
+        val contactPointBaseOffset = 20L
         val contactPointStride = 28L
 
         for (i in 0 until 4) {
@@ -494,7 +486,6 @@ class Nim(plugin: Nimcube) {
                 segment.get(ValueLayout.JAVA_INT, 12),
                 segment.get(ValueLayout.JAVA_INT, 16),
             ),
-            manifoldId = segment.get(ValueLayout.JAVA_LONG, 24),
             contactPoints = contactPoints,
         )
     }
@@ -502,7 +493,7 @@ class Nim(plugin: Nimcube) {
     fun getA2sCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2sCollisionResult {
         val segment = getA2sCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
-        val contactPointBaseOffset = 24L
+        val contactPointBaseOffset = 12L
         val contactPointStride = 28L
 
         for (i in 0 until 4) {
@@ -528,7 +519,6 @@ class Nim(plugin: Nimcube) {
                 segment.get(ValueLayout.JAVA_INT, 4),
                 segment.get(ValueLayout.JAVA_INT, 8),
             ),
-            manifoldId = segment.get(ValueLayout.JAVA_LONG, 16),
             contactPoints = contactPoints,
         )
     }

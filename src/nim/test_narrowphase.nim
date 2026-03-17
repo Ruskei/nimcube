@@ -301,29 +301,6 @@ proc test_a2s_face_manifold_is_canonical_when_static_is_reference() =
     doAssert dynamic_surface_point.x > contact.position.x
     doAssert dynamic_surface_point.x <= 1.0001'f32
 
-proc test_a2s_manifold_id_is_stable() =
-  var fixture = init_pool_fixture()
-  defer: fixture.deinit()
-
-  let handle = fixture.add_body(
-    pos = (0'f64, 0'f64, 0'f64),
-    dimensions = (2'f32, 2'f32, 2'f32),
-  )
-  fixture.sync_body_inputs()
-
-  let broadphase_hit = (body: handle, static_bb: make_bb(0.5'f32, -1'f32, -1'f32, 2.5'f32, 1'f32, 1'f32))
-  fixture.pool.clear_narrowphase_inputs()
-  fixture.pool.add_a2s_broadphase_result(broadphase_hit)
-  fixture.pool.dispatch_narrowphase_and_wait()
-  let first_id = fixture.pool.collect_results()[0].a2s.manifold_id
-
-  fixture.pool.clear_narrowphase_inputs()
-  fixture.pool.add_a2s_broadphase_result(broadphase_hit)
-  fixture.pool.dispatch_narrowphase_and_wait()
-  let second_id = fixture.pool.collect_results()[0].a2s.manifold_id
-
-  doAssert first_id == second_id
-
 proc test_mixed_a2a_and_a2s_outputs() =
   var fixture = init_pool_fixture()
   defer: fixture.deinit()
@@ -534,7 +511,6 @@ when is_main_module:
   test_pool_shutdown()
   test_a2s_face_manifold_generation()
   test_a2s_face_manifold_is_canonical_when_static_is_reference()
-  test_a2s_manifold_id_is_stable()
   test_mixed_a2a_and_a2s_outputs()
   test_a2a_face_manifold_is_canonical_when_body_b_is_reference()
   test_face_manifold_generation()
