@@ -1,9 +1,9 @@
-import std/hashes
 import std/math
 import std/tables
 import std/times
 import std/monotimes
 
+import chunk_positions
 import physics_math
 import command_queue
 import constraint_solver
@@ -13,10 +13,9 @@ import meshing
 import narrowphase
 import rw_lock
 
-type
-  ChunkPosition* = object
-    x*, z*: int32
+export chunk_positions
 
+type
   World* = ref object
     valid*: bool
     internal_data*: InternalData
@@ -37,15 +36,6 @@ type
 
 var worlds*: seq[World]
 const chunk_range_epsilon = 1.0e-5'f32
-
-proc hash*(chunk_pos: ChunkPosition): Hash =
-  let packed =
-    ((chunk_pos.x.uint32 and 0xFFFF'u32) shl 16) or
-    (chunk_pos.z.uint32 and 0xFFFF'u32)
-  Hash(packed)
-
-proc chunk_position*(chunk_x, chunk_z: int32): ChunkPosition =
-  ChunkPosition(x: chunk_x, z: chunk_z)
 
 proc floor_div(value, divisor: int32): int32 {.inline.} =
   result = value div divisor
@@ -95,7 +85,7 @@ proc tick_world*(world_index: int) =
 
   let data = world.internal_data
 
-  world.command_queue.process_command_queue(data, world.aabb_tree)
+  world.command_queue.process_command_queue(data, world.aabb_tree, world.chunk_meshes_by_position)
   world.narrowphase_pool.set_body_inputs(
     data.slot_count(),
     data.local_pos.len,
@@ -155,17 +145,17 @@ proc tick_world*(world_index: int) =
 
   let narrowphase = get_mono_time()
 
-  world.a2a_contact_manifolds.setLen(0)
-  world.a2s_contact_manifolds.setLen(0)
-  for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
-    let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
-    for output_idx in 0 ..< worker_count:
-      let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
-      case result.kind
-      of nrk_a2a:
-        world.a2a_contact_manifolds.add result.a2a
-      of nrk_a2s:
-        world.a2s_contact_manifolds.add result.a2s
+  # world.a2a_contact_manifolds.setLen(0)
+  # world.a2s_contact_manifolds.setLen(0)
+  # for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
+  #   let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
+  #   for output_idx in 0 ..< worker_count:
+  #     let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
+  #     case result.kind
+  #     of nrk_a2a:
+  #       world.a2a_contact_manifolds.add result.a2a
+  #     of nrk_a2s:
+  #       world.a2s_contact_manifolds.add result.a2s
 
   let Δt = world.Δt
   for i in 0 ..< data.local_pos.len:
@@ -233,16 +223,6 @@ proc global_dimensions*(world: World, handle: BodyHandle): F3 =
   with_read_lock(world.external_data.lock):
     if world.external_data.is_valid_no_lock(handle):
       result = world.external_data.dimensions[world.external_data.slot_to_dense[handle.slot]]
-
-proc add_chunk_mesh*(world: World, chunk_pos: ChunkPosition, chunk_binary_data: ptr ChunkBinaryData): bool =
-  if world.is_nil or not world.valid or chunk_binary_data.is_nil:
-    return false
-
-  let origin_x = (chunk_pos.x * chunk_width.int32).cint
-  let origin_z = (chunk_pos.z * chunk_width.int32).cint
-  var chunk_mesh = build_chunk_mesh(origin_x, chunk_mesh_min_y.cint, origin_z, chunk_binary_data)
-  world.chunk_meshes_by_position[chunk_pos] = move(chunk_mesh)
-  true
 
 proc aabb_tree_leaf_count*(world: World): int =
   world.aabb_tree.leaf_count

@@ -281,10 +281,23 @@ proc c_add_chunk_mesh_to_world*(
   if not world.valid:
     return false
 
-  result = world.add_chunk_mesh(
-    chunk_position(chunk_x.int32, chunk_z.int32),
-    chunk_binary_data,
+  let chunk_binary_data_copy = cast[ptr ChunkBinaryData](alloc(sizeof(ChunkBinaryData)))
+  copyMem(chunk_binary_data_copy, chunk_binary_data, sizeof(ChunkBinaryData))
+  defer:
+    dealloc(chunk_binary_data_copy)
+
+  let origin_x = chunk_x * chunk_width.cint
+  let origin_z = chunk_z * chunk_width.cint
+  let chunk_mesh = build_chunk_mesh(origin_x, chunk_mesh_min_y.cint, origin_z, chunk_binary_data_copy)
+
+  world.command_queue.add Command(
+    kind: ck_add_mesh,
+    chunk_x: chunk_x.int32,
+    chunk_z: chunk_z.int32,
+    chunk_mesh: chunk_mesh,
   )
+
+  result = true
 
 proc c_num_bbs(chunk_mesh_index: cint): cint {.cdecl, exportc, dynlib.} =
   if chunk_mesh_index >= chunk_meshes.len:
