@@ -1,4 +1,5 @@
 import std/math
+import std/tables
 
 import dynamic_aabb_tree
 import constraint_solver
@@ -12,6 +13,8 @@ type
     tree: DynamicAabbTree[BodyHandle]
     pool: NarrowphasePool
     buffer: VelocityConstraintBuffer
+    a2a_warm_start: TableRef[A2aWarmStartKey, A2aWarmStartEntry]
+    a2s_warm_start: TableRef[A2sWarmStartKey, A2sWarmStartEntry]
     handle_a: BodyHandle
     handle_b: BodyHandle
 
@@ -54,14 +57,26 @@ proc dispatch_a2a(fixture: var SolverFixture, dt: float32) =
   fixture.pool.clear_narrowphase_inputs()
   fixture.pool.add_a2a_broadphase_result((fixture.handle_a, fixture.handle_b))
   fixture.pool.dispatch_narrowphase_and_wait()
-  fixture.buffer.precompute_velocity_constraints(fixture.data, fixture.pool, dt)
+  fixture.buffer.precompute_velocity_constraints(
+    fixture.data,
+    fixture.pool,
+    dt,
+    fixture.a2a_warm_start,
+    fixture.a2s_warm_start,
+  )
 
 proc dispatch_a2s(fixture: var SolverFixture, active_handle: BodyHandle, static_bb: FBB, dt: float32) =
   fixture.pool.sync_body_inputs(fixture.data)
   fixture.pool.clear_narrowphase_inputs()
   fixture.pool.add_a2s_broadphase_result((body: active_handle, static_bb: static_bb))
   fixture.pool.dispatch_narrowphase_and_wait()
-  fixture.buffer.precompute_velocity_constraints(fixture.data, fixture.pool, dt)
+  fixture.buffer.precompute_velocity_constraints(
+    fixture.data,
+    fixture.pool,
+    dt,
+    fixture.a2a_warm_start,
+    fixture.a2s_warm_start,
+  )
 
 proc dispatch_mixed(fixture: var SolverFixture, active_handle: BodyHandle, static_bb: FBB, dt: float32) =
   fixture.pool.sync_body_inputs(fixture.data)
@@ -69,7 +84,13 @@ proc dispatch_mixed(fixture: var SolverFixture, active_handle: BodyHandle, stati
   fixture.pool.add_a2a_broadphase_result((fixture.handle_a, fixture.handle_b))
   fixture.pool.add_a2s_broadphase_result((body: active_handle, static_bb: static_bb))
   fixture.pool.dispatch_narrowphase_and_wait()
-  fixture.buffer.precompute_velocity_constraints(fixture.data, fixture.pool, dt)
+  fixture.buffer.precompute_velocity_constraints(
+    fixture.data,
+    fixture.pool,
+    dt,
+    fixture.a2a_warm_start,
+    fixture.a2s_warm_start,
+  )
 
 proc deinit(fixture: var SolverFixture) =
   if not fixture.pool.is_nil:
@@ -89,6 +110,8 @@ proc init_fixture(
   result.data = InternalData()
   result.tree = init_dynamic_aabb_tree[BodyHandle]()
   result.pool = init_narrowphase_pool()
+  result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
+  result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
   result.handle_a = result.data.create_cuboid(
     aabb_tree = result.tree,
     initial_pos = pos_a,
@@ -134,6 +157,19 @@ proc max_a2s_friction_speed(fixture: SolverFixture): float32 =
     let constraint = fixture.buffer.a2s_frictions.constraints[idx]
     let v_a = fixture.data.vel[constraint.dense_a] + (fixture.data.ω[constraint.dense_a] × constraint.r_a)
     result = max(result, abs(v_a ∙ constraint.axis))
+
+proc rebuild_warm_start(fixture: var SolverFixture) =
+  fixture.buffer.rebuild_warm_start_cache(fixture.a2a_warm_start, fixture.a2s_warm_start)
+
+proc positive_a2a_normal_impulse_count(fixture: SolverFixture): int =
+  for idx in 0 ..< fixture.buffer.a2a_normals.count:
+    if fixture.buffer.a2a_normals.constraints[idx].accumulated_impulse > 0'f32:
+      inc result
+
+proc positive_a2s_normal_impulse_count(fixture: SolverFixture): int =
+  for idx in 0 ..< fixture.buffer.a2s_normals.count:
+    if fixture.buffer.a2s_normals.constraints[idx].accumulated_impulse > 0'f32:
+      inc result
 
 proc test_head_on_equal_mass_collision() =
   var fixture = init_fixture(
@@ -482,6 +518,166 @@ proc test_a2s_static_active_body_is_skipped() =
   doAssert fixture.buffer.a2s_normals.count == 0
   doAssert fixture.buffer.a2s_frictions.count == 0
 
+proc test_a2a_warm_start_round_trip() =
+  let dt = 1'f32 / 60'f32
+  let zero: F3 = (0'f32, 0'f32, 0'f32)
+
+  var source = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.5'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: source.deinit()
+
+  source.buffer.solve_velocity_constraints(source.data, normal_iterations, friction_iterations, velocity_solve_sor)
+  source.rebuild_warm_start()
+  doAssert source.a2a_warm_start.len == 1
+
+  var target = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.5'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: target.deinit()
+
+  target.a2a_warm_start = source.a2a_warm_start
+  target.dispatch_a2a(dt)
+
+  doAssert target.positive_a2a_normal_impulse_count() > 0
+  doAssert not approx_vec_equal(target.data.vel[0], zero)
+  doAssert not approx_vec_equal(target.data.vel[1], zero)
+
+proc test_a2a_multi_contact_warm_start_restores_all_contacts() =
+  let dt = 1'f32 / 60'f32
+  let zero: F3 = (0'f32, 0'f32, 0'f32)
+
+  var source = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.5'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: source.deinit()
+
+  doAssert source.buffer.a2a_normals.count == 4
+  source.buffer.solve_velocity_constraints(source.data, normal_iterations, friction_iterations, velocity_solve_sor)
+  source.rebuild_warm_start()
+
+  var target = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.5'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: target.deinit()
+
+  target.a2a_warm_start = source.a2a_warm_start
+  target.dispatch_a2a(dt)
+
+  doAssert target.buffer.a2a_normals.count == 4
+  doAssert target.positive_a2a_normal_impulse_count() == 4
+
+proc test_a2a_warm_start_hits_with_reversed_body_order() =
+  let dt = 1'f32 / 60'f32
+  let zero: F3 = (0'f32, 0'f32, 0'f32)
+
+  var source = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.5'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: source.deinit()
+
+  source.buffer.solve_velocity_constraints(source.data, normal_iterations, 0, velocity_solve_sor)
+  source.rebuild_warm_start()
+
+  var target = init_fixture(
+    pos_a = (1.5'f64, 0'f64, 0'f64),
+    pos_b = (0'f64, 0'f64, 0'f64),
+    vel_a = zero,
+    vel_b = zero,
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: target.deinit()
+
+  target.a2a_warm_start = source.a2a_warm_start
+  target.dispatch_a2a(dt)
+
+  doAssert target.positive_a2a_normal_impulse_count() > 0
+
+proc test_a2s_warm_start_round_trip() =
+  let dt = 1'f32 / 60'f32
+  let static_bb = make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32)
+
+  var source = init_fixture(
+    pos_a = (20'f64, 20'f64, 20'f64),
+    pos_b = (0'f64, 0.49'f64, 0'f64),
+    vel_a = (0'f32, 0'f32, 0'f32),
+    vel_b = (0'f32, -2'f32, 0'f32),
+    dimensions_a = (1'f32, 1'f32, 1'f32),
+    dimensions_b = (1'f32, 1'f32, 1'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: source.deinit()
+
+  source.dispatch_a2s(source.handle_b, static_bb, dt)
+  source.buffer.solve_velocity_constraints(source.data, normal_iterations, friction_iterations, velocity_solve_sor)
+  source.rebuild_warm_start()
+  doAssert source.a2s_warm_start.len == 1
+
+  var target = init_fixture(
+    pos_a = (20'f64, 20'f64, 20'f64),
+    pos_b = (0'f64, 0.49'f64, 0'f64),
+    vel_a = (0'f32, 0'f32, 0'f32),
+    vel_b = (0'f32, -2'f32, 0'f32),
+    dimensions_a = (1'f32, 1'f32, 1'f32),
+    dimensions_b = (1'f32, 1'f32, 1'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+    dt = dt,
+  )
+  defer: target.deinit()
+
+  target.a2s_warm_start = source.a2s_warm_start
+  target.dispatch_a2s(target.handle_b, static_bb, dt)
+
+  doAssert target.positive_a2s_normal_impulse_count() > 0
+  doAssert target.data.vel[1].y > -2'f32
+
 when is_main_module:
   test_head_on_equal_mass_collision()
   test_a2a_dynamic_box_against_static_floor()
@@ -499,4 +695,8 @@ when is_main_module:
   test_precompute_splits_a2a_and_a2s_buffers()
   test_a2s_convergence_across_iterations()
   test_a2s_static_active_body_is_skipped()
+  test_a2a_warm_start_round_trip()
+  test_a2a_multi_contact_warm_start_restores_all_contacts()
+  test_a2a_warm_start_hits_with_reversed_body_order()
+  test_a2s_warm_start_round_trip()
   echo "constraint solver tests passed"

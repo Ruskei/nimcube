@@ -1,3 +1,4 @@
+import std/hashes
 import std/math
 
 type
@@ -9,6 +10,16 @@ type
   Q*[T] = tuple[x, y, z, w: T]
   QF* = Q[float32]
   FBB* = BB[float32]
+
+proc hash*(bb: FBB): Hash =
+  var h: Hash = 0
+  h = h !& hash(bb.min.x)
+  h = h !& hash(bb.min.y)
+  h = h !& hash(bb.min.z)
+  h = h !& hash(bb.max.x)
+  h = h !& hash(bb.max.y)
+  h = h !& hash(bb.max.z)
+  result = !$h
 
 converter f3_to_d3*(v: F3): D3 =
   result.x = v.x.float64

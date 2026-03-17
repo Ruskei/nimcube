@@ -269,6 +269,26 @@ proc test_a2s_face_manifold_generation() =
     doAssert approx_equal(contact.normal.y, 0'f32)
     doAssert approx_equal(contact.normal.z, 0'f32)
 
+proc test_a2s_manifold_carries_static_hash() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  let static_bb = make_bb(0.5'f32, -1'f32, -1'f32, 2.5'f32, 1'f32, 1'f32)
+  fixture.sync_body_inputs()
+
+  fixture.pool.clear_narrowphase_inputs()
+  fixture.pool.add_a2s_broadphase_result((body: handle, static_bb: static_bb))
+  fixture.pool.dispatch_narrowphase_and_wait()
+
+  let results = fixture.pool.collect_results()
+  doAssert results.len == 1
+  doAssert results[0].kind == nrk_a2s
+  doAssert results[0].a2s.static_hash == hash(static_bb)
+
 proc test_a2s_face_manifold_is_canonical_when_static_is_reference() =
   var fixture = init_pool_fixture()
   defer: fixture.deinit()
@@ -510,6 +530,7 @@ when is_main_module:
   test_repeated_dispatch_reuses_capacity()
   test_pool_shutdown()
   test_a2s_face_manifold_generation()
+  test_a2s_manifold_carries_static_hash()
   test_a2s_face_manifold_is_canonical_when_static_is_reference()
   test_mixed_a2a_and_a2s_outputs()
   test_a2a_face_manifold_is_canonical_when_body_b_is_reference()

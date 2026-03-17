@@ -1,3 +1,4 @@
+import std/hashes
 import std/locks
 import std/osproc
 import std/typedthreads
@@ -30,6 +31,7 @@ type
     contact_points*: array[4, ContactPoint]
     contact_count*: uint8
     body_a*: BodyHandle
+    static_hash*: Hash
 
   NarrowphaseResultKind* = enum
     nrk_a2a
@@ -838,6 +840,7 @@ proc generate_a2s_cuboid_manifold(
 
   manifold = default(A2sCollisionManifold)
   manifold.body_a = hit.body
+  manifold.static_hash = hash(hit.static_bb)
 
   case sat_hit.kind
   of fk_face_a, fk_face_b:

@@ -30,6 +30,8 @@ type
     chunk_meshes_by_position*: Table[ChunkPosition, ChunkMesh]
     narrowphase_pool: NarrowphasePool
     velocity_constraints: VelocityConstraintBuffer
+    a2a_warm_start: TableRef[A2aWarmStartKey, A2aWarmStartEntry]
+    a2s_warm_start: TableRef[A2sWarmStartKey, A2sWarmStartEntry]
     a2a_contact_manifolds: seq[A2aCollisionManifold]
     a2s_contact_manifolds: seq[A2sCollisionManifold]
 
@@ -80,6 +82,8 @@ proc init_world*(Δt: float32, acceleration: F3): World =
     aabb_tree: init_dynamic_aabb_tree[BodyHandle](fat_margin = 0.3'f32),
     chunk_meshes_by_position: init_table[ChunkPosition, ChunkMesh](),
     narrowphase_pool: init_narrowphase_pool(),
+    a2a_warm_start: newTable[A2aWarmStartKey, A2aWarmStartEntry](),
+    a2s_warm_start: newTable[A2sWarmStartKey, A2sWarmStartEntry](),
   )
 
 proc tick_world*(world_index: int) =
@@ -151,24 +155,31 @@ proc tick_world*(world_index: int) =
 
   let narrowphase = get_mono_time()
 
-  # world.a2a_contact_manifolds.setLen(0)
-  # world.a2s_contact_manifolds.setLen(0)
-  # for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
-  #   let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
-  #   for output_idx in 0 ..< worker_count:
-  #     let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
-  #     case result.kind
-  #     of nrk_a2a:
-  #       world.a2a_contact_manifolds.add result.a2a
-  #     of nrk_a2s:
-  #       world.a2s_contact_manifolds.add result.a2s
+  world.a2a_contact_manifolds.setLen(0)
+  world.a2s_contact_manifolds.setLen(0)
+  for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
+    let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
+    for output_idx in 0 ..< worker_count:
+      let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
+      case result.kind
+      of nrk_a2a:
+        world.a2a_contact_manifolds.add result.a2a
+      of nrk_a2s:
+        world.a2s_contact_manifolds.add result.a2s
 
   let Δt = world.Δt
   for i in 0 ..< data.local_pos.len:
     data.vel[i] += world.acceleration * Δt
 
-  world.velocity_constraints.precompute_velocity_constraints(data, world.narrowphase_pool, Δt)
+  world.velocity_constraints.precompute_velocity_constraints(
+    data,
+    world.narrowphase_pool,
+    Δt,
+    world.a2a_warm_start,
+    world.a2s_warm_start,
+  )
   world.velocity_constraints.solve_velocity_constraints(data, normal_iterations, friction_iterations, velocity_solve_sor)
+  world.velocity_constraints.rebuild_warm_start_cache(world.a2a_warm_start, world.a2s_warm_start)
 
   let constraint_solving = get_mono_time()
 
