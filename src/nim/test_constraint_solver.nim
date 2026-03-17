@@ -110,17 +110,30 @@ proc init_fixture(
   result.dispatch_a2a(dt)
 
 proc total_residual(fixture: SolverFixture): float32 =
-  for idx in 0 ..< fixture.buffer.a2a.count:
-    result += fixture.data.constraint_residual(fixture.buffer.a2a.constraints[idx])
-  for idx in 0 ..< fixture.buffer.a2s.count:
-    result += fixture.data.constraint_residual(fixture.buffer.a2s.constraints[idx])
+  for idx in 0 ..< fixture.buffer.a2a_normals.count:
+    result += fixture.data.constraint_residual(fixture.buffer.a2a_normals.constraints[idx])
+  for idx in 0 ..< fixture.buffer.a2s_normals.count:
+    result += fixture.data.constraint_residual(fixture.buffer.a2s_normals.constraints[idx])
 
 proc a2s_residual(fixture: SolverFixture): float32 =
-  for idx in 0 ..< fixture.buffer.a2s.count:
-    result += fixture.data.constraint_residual(fixture.buffer.a2s.constraints[idx])
+  for idx in 0 ..< fixture.buffer.a2s_normals.count:
+    result += fixture.data.constraint_residual(fixture.buffer.a2s_normals.constraints[idx])
 
 proc total_constraint_count(buffer: VelocityConstraintBuffer): int =
-  buffer.a2a.count + buffer.a2s.count
+  buffer.a2a_normals.count + buffer.a2s_normals.count + buffer.a2a_frictions.count + buffer.a2s_frictions.count
+
+proc max_a2a_friction_speed(fixture: SolverFixture): float32 =
+  for idx in 0 ..< fixture.buffer.a2a_frictions.count:
+    let constraint = fixture.buffer.a2a_frictions.constraints[idx]
+    let v_a = fixture.data.vel[constraint.dense_a] + (fixture.data.ω[constraint.dense_a] × constraint.r_a)
+    let v_b = fixture.data.vel[constraint.dense_b] + (fixture.data.ω[constraint.dense_b] × constraint.r_b)
+    result = max(result, abs((v_a - v_b) ∙ constraint.axis))
+
+proc max_a2s_friction_speed(fixture: SolverFixture): float32 =
+  for idx in 0 ..< fixture.buffer.a2s_frictions.count:
+    let constraint = fixture.buffer.a2s_frictions.constraints[idx]
+    let v_a = fixture.data.vel[constraint.dense_a] + (fixture.data.ω[constraint.dense_a] × constraint.r_a)
+    result = max(result, abs(v_a ∙ constraint.axis))
 
 proc test_head_on_equal_mass_collision() =
   var fixture = init_fixture(
@@ -135,10 +148,12 @@ proc test_head_on_equal_mass_collision() =
   )
   defer: fixture.deinit()
 
-  doAssert fixture.buffer.a2a.count > 0
-  doAssert fixture.buffer.a2s.count == 0
+  doAssert fixture.buffer.a2a_normals.count > 0
+  doAssert fixture.buffer.a2a_frictions.count == 2 * fixture.buffer.a2a_normals.count
+  doAssert fixture.buffer.a2s_normals.count == 0
+  doAssert fixture.buffer.a2s_frictions.count == 0
   let initial_residual = fixture.total_residual()
-  fixture.buffer.solve_velocity_constraints(fixture.data, velocity_solve_iterations, velocity_solve_sor)
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, friction_iterations, velocity_solve_sor)
   let final_residual = fixture.total_residual()
 
   doAssert final_residual < initial_residual
@@ -159,8 +174,8 @@ proc test_a2a_dynamic_box_against_static_floor() =
   )
   defer: fixture.deinit()
 
-  doAssert fixture.buffer.a2a.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, velocity_solve_iterations, velocity_solve_sor)
+  doAssert fixture.buffer.a2a_normals.count > 0
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, friction_iterations, velocity_solve_sor)
 
   doAssert fixture.data.vel[1].y > -0.2'f32
   doAssert approx_vec_equal(fixture.data.vel[0], (0'f32, 0'f32, 0'f32))
@@ -179,8 +194,8 @@ proc test_a2a_off_center_contact_produces_angular_response() =
   )
   defer: fixture.deinit()
 
-  doAssert fixture.buffer.a2a.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, velocity_solve_iterations, velocity_solve_sor)
+  doAssert fixture.buffer.a2a_normals.count > 0
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, 0, velocity_solve_sor)
 
   doAssert fixture.data.ω[1].is_finite
   doAssert fixture.data.ω[1].length_squared > 1.0e-4'f32
@@ -199,8 +214,8 @@ proc test_a2a_body_b_reference_pushes_bodies_apart() =
   )
   defer: fixture.deinit()
 
-  doAssert fixture.buffer.a2a.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, 1, velocity_solve_sor)
+  doAssert fixture.buffer.a2a_normals.count > 0
+  fixture.buffer.solve_velocity_constraints(fixture.data, 1, 1, velocity_solve_sor)
 
   doAssert fixture.data.vel[0].x < 0'f32
   doAssert fixture.data.vel[1].x > 0'f32
@@ -220,10 +235,10 @@ proc test_a2a_edge_contact_reduces_residual() =
   )
   defer: fixture.deinit()
 
-  doAssert fixture.buffer.a2a.count == 1
-  let initial_residual = fixture.data.constraint_residual(fixture.buffer.a2a.constraints[0])
-  fixture.buffer.solve_velocity_constraints(fixture.data, 1, velocity_solve_sor)
-  let final_residual = fixture.data.constraint_residual(fixture.buffer.a2a.constraints[0])
+  doAssert fixture.buffer.a2a_normals.count == 1
+  let initial_residual = fixture.data.constraint_residual(fixture.buffer.a2a_normals.constraints[0])
+  fixture.buffer.solve_velocity_constraints(fixture.data, 1, 1, velocity_solve_sor)
+  let final_residual = fixture.data.constraint_residual(fixture.buffer.a2a_normals.constraints[0])
 
   doAssert final_residual < initial_residual
 
@@ -240,7 +255,7 @@ proc test_a2a_convergence_across_iterations() =
       inverse_mass_b = 1'f32,
     )
     defer: fixture.deinit()
-    fixture.buffer.solve_velocity_constraints(fixture.data, iterations, velocity_solve_sor)
+    fixture.buffer.solve_velocity_constraints(fixture.data, iterations, friction_iterations, velocity_solve_sor)
     fixture.total_residual()
 
   let residual_1 = residual_after_iterations(1)
@@ -265,6 +280,27 @@ proc test_static_static_contacts_are_skipped() =
 
   doAssert fixture.buffer.total_constraint_count() == 0
 
+proc test_a2a_friction_reduces_tangential_relative_speed() =
+  var fixture = init_fixture(
+    pos_a = (0'f64, 0'f64, 0'f64),
+    pos_b = (1.98'f64, 0'f64, 0'f64),
+    vel_a = (1'f32, 0'f32, 1'f32),
+    vel_b = (-1'f32, 0'f32, -1'f32),
+    dimensions_a = (2'f32, 2'f32, 2'f32),
+    dimensions_b = (2'f32, 2'f32, 2'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+  )
+  defer: fixture.deinit()
+
+  doAssert fixture.buffer.a2a_normals.count > 0
+  doAssert fixture.buffer.a2a_frictions.count == 2 * fixture.buffer.a2a_normals.count
+  let initial_friction_speed = fixture.max_a2a_friction_speed()
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, friction_iterations, velocity_solve_sor)
+  let final_friction_speed = fixture.max_a2a_friction_speed()
+
+  doAssert final_friction_speed < initial_friction_speed
+
 proc test_a2s_dynamic_box_against_static_floor() =
   var fixture = init_fixture(
     pos_a = (20'f64, 20'f64, 20'f64),
@@ -280,9 +316,11 @@ proc test_a2s_dynamic_box_against_static_floor() =
 
   fixture.dispatch_a2s(fixture.handle_b, make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32), 1'f32 / 60'f32)
 
-  doAssert fixture.buffer.a2a.count == 0
-  doAssert fixture.buffer.a2s.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, velocity_solve_iterations, velocity_solve_sor)
+  doAssert fixture.buffer.a2a_normals.count == 0
+  doAssert fixture.buffer.a2a_frictions.count == 0
+  doAssert fixture.buffer.a2s_normals.count > 0
+  doAssert fixture.buffer.a2s_frictions.count == 2 * fixture.buffer.a2s_normals.count
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, friction_iterations, velocity_solve_sor)
 
   doAssert fixture.data.vel[1].y > -0.2'f32
 
@@ -301,8 +339,8 @@ proc test_a2s_off_center_contact_produces_angular_response() =
 
   fixture.dispatch_a2s(fixture.handle_b, make_bb(0.4'f32, 0.4'f32, -1'f32, 2.4'f32, 2.4'f32, 1'f32), 1'f32 / 60'f32)
 
-  doAssert fixture.buffer.a2s.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, velocity_solve_iterations, velocity_solve_sor)
+  doAssert fixture.buffer.a2s_normals.count > 0
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, 0, velocity_solve_sor)
 
   doAssert fixture.data.ω[1].is_finite
   doAssert fixture.data.ω[1].length_squared > 1.0e-4'f32
@@ -323,10 +361,64 @@ proc test_a2s_static_reference_pushes_body_outward() =
 
   fixture.dispatch_a2s(fixture.handle_b, make_bb(0.5'f32, -1'f32, -1'f32, 2.5'f32, 1'f32, 1'f32), 1'f32 / 60'f32)
 
-  doAssert fixture.buffer.a2s.count > 0
-  fixture.buffer.solve_velocity_constraints(fixture.data, 1, velocity_solve_sor)
+  doAssert fixture.buffer.a2s_normals.count > 0
+  fixture.buffer.solve_velocity_constraints(fixture.data, 1, 1, velocity_solve_sor)
 
   doAssert fixture.data.vel[1].x < 0'f32
+
+proc test_a2s_friction_reduces_tangential_speed() =
+  var fixture = init_fixture(
+    pos_a = (20'f64, 20'f64, 20'f64),
+    pos_b = (0'f64, 0.49'f64, 0'f64),
+    vel_a = (0'f32, 0'f32, 0'f32),
+    vel_b = (0.5'f32, -2'f32, 0'f32),
+    dimensions_a = (1'f32, 1'f32, 1'f32),
+    dimensions_b = (1'f32, 1'f32, 1'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+  )
+  defer: fixture.deinit()
+
+  fixture.dispatch_a2s(fixture.handle_b, make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32), 1'f32 / 60'f32)
+
+  doAssert fixture.buffer.a2s_normals.count > 0
+  doAssert fixture.buffer.a2s_frictions.count == 2 * fixture.buffer.a2s_normals.count
+  let initial_friction_speed = fixture.max_a2s_friction_speed()
+  fixture.buffer.solve_velocity_constraints(fixture.data, normal_iterations, friction_iterations, velocity_solve_sor)
+  let final_friction_speed = fixture.max_a2s_friction_speed()
+
+  doAssert final_friction_speed < initial_friction_speed
+  doAssert fixture.data.vel[1].y > -0.2'f32
+
+proc test_a2s_friction_reprojects_when_normal_limit_is_zero() =
+  var fixture = init_fixture(
+    pos_a = (20'f64, 20'f64, 20'f64),
+    pos_b = (0'f64, 0.49'f64, 0'f64),
+    vel_a = (0'f32, 0'f32, 0'f32),
+    vel_b = (0.5'f32, -2'f32, 0'f32),
+    dimensions_a = (1'f32, 1'f32, 1'f32),
+    dimensions_b = (1'f32, 1'f32, 1'f32),
+    inverse_mass_a = 1'f32,
+    inverse_mass_b = 1'f32,
+  )
+  defer: fixture.deinit()
+
+  fixture.dispatch_a2s(fixture.handle_b, make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32), 1'f32 / 60'f32)
+
+  doAssert fixture.buffer.a2s_normals.count > 0
+  doAssert fixture.buffer.a2s_frictions.count > 0
+
+  let friction_idx = 0
+  let normal_idx = fixture.buffer.a2s_frictions.constraints[friction_idx].normal_constraint_idx
+  fixture.buffer.a2s_normals.constraints[normal_idx].accumulated_impulse = 0'f32
+  fixture.buffer.a2s_frictions.constraints[friction_idx].accumulated_impulse = 0.25'f32
+  fixture.buffer.a2s_frictions.solve_a2s_friction_velocity_constraints_iteration(
+    fixture.data,
+    fixture.buffer.a2s_normals,
+    velocity_solve_sor,
+  )
+
+  doAssert approx_equal(fixture.buffer.a2s_frictions.constraints[friction_idx].accumulated_impulse, 0'f32, 1.0e-5'f32)
 
 proc test_precompute_splits_a2a_and_a2s_buffers() =
   var fixture = init_fixture(
@@ -343,8 +435,10 @@ proc test_precompute_splits_a2a_and_a2s_buffers() =
 
   fixture.dispatch_mixed(fixture.handle_a, make_bb(0.5'f32, -1'f32, -1'f32, 2.5'f32, 1'f32, 1'f32), 1'f32 / 60'f32)
 
-  doAssert fixture.buffer.a2a.count > 0
-  doAssert fixture.buffer.a2s.count > 0
+  doAssert fixture.buffer.a2a_normals.count > 0
+  doAssert fixture.buffer.a2a_frictions.count == 2 * fixture.buffer.a2a_normals.count
+  doAssert fixture.buffer.a2s_normals.count > 0
+  doAssert fixture.buffer.a2s_frictions.count == 2 * fixture.buffer.a2s_normals.count
 
 proc test_a2s_convergence_across_iterations() =
   proc residual_after_iterations(iterations: int): float32 =
@@ -360,7 +454,7 @@ proc test_a2s_convergence_across_iterations() =
     )
     defer: fixture.deinit()
     fixture.dispatch_a2s(fixture.handle_b, make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32), 1'f32 / 60'f32)
-    fixture.buffer.solve_velocity_constraints(fixture.data, iterations, velocity_solve_sor)
+    fixture.buffer.solve_velocity_constraints(fixture.data, iterations, friction_iterations, velocity_solve_sor)
     fixture.a2s_residual()
 
   let residual_1 = residual_after_iterations(1)
@@ -385,7 +479,8 @@ proc test_a2s_static_active_body_is_skipped() =
 
   fixture.dispatch_a2s(fixture.handle_b, make_bb(-3'f32, -2'f32, -3'f32, 3'f32, 0'f32, 3'f32), 1'f32 / 60'f32)
 
-  doAssert fixture.buffer.a2s.count == 0
+  doAssert fixture.buffer.a2s_normals.count == 0
+  doAssert fixture.buffer.a2s_frictions.count == 0
 
 when is_main_module:
   test_head_on_equal_mass_collision()
@@ -395,9 +490,12 @@ when is_main_module:
   test_a2a_edge_contact_reduces_residual()
   test_a2a_convergence_across_iterations()
   test_static_static_contacts_are_skipped()
+  test_a2a_friction_reduces_tangential_relative_speed()
   test_a2s_dynamic_box_against_static_floor()
   test_a2s_off_center_contact_produces_angular_response()
   test_a2s_static_reference_pushes_body_outward()
+  test_a2s_friction_reduces_tangential_speed()
+  test_a2s_friction_reprojects_when_normal_limit_is_zero()
   test_precompute_splits_a2a_and_a2s_buffers()
   test_a2s_convergence_across_iterations()
   test_a2s_static_active_body_is_skipped()

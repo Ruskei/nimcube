@@ -10,7 +10,6 @@ import org.bukkit.entity.Player
 import org.joml.Quaternionf
 import org.joml.Vector3d
 import org.joml.Vector3f
-import kotlin.random.Random
 
 class GridCuboidsCommand(private val plugin: Nimcube) : CommandExecutor {
     fun init() {
@@ -39,16 +38,10 @@ class GridCuboidsCommand(private val plugin: Nimcube) : CommandExecutor {
             }
 
         val origin = sender.location
-        val spacing = 3.0
-        val random = Random.Default
+        val spacing = 1.1
 
         for (x in 0 until 10) {
             for (z in 0 until 10) {
-                val velocity = Vector3f(
-                    random.nextFloat() * 4f - 2f,
-                    random.nextFloat() * 4f - 2f,
-                    random.nextFloat() * 4f - 2f,
-                )
                 val potentialBodyHandle = nim.createCuboid(
                     nimWorld.worldIndex,
                     Vector3d(
@@ -56,10 +49,10 @@ class GridCuboidsCommand(private val plugin: Nimcube) : CommandExecutor {
                         origin.y,
                         origin.z + z * spacing,
                     ),
-                    velocity,
+                    Vector3f(),
                     Vector3f(),
                     Quaternionf(),
-                    Vector3f(2f, 1f, 0.5f),
+                    Vector3f(1f),
                     0.5f,
                 )
 

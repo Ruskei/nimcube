@@ -3,10 +3,12 @@ import narrowphase
 import physics_math
 
 const
-  velocity_solve_iterations* = 8
+  normal_iterations* = 8
+  friction_iterations* = 4
   velocity_solve_sor* = 1.1'f32
   baumgarte_beta* = 0.2'f32
   baumgarte_slop* = 0.01'f32
+  friction_coefficient* = 0.5'f32
   baumgarte_max_bias_velocity = 10'f32
   constraint_epsilon = 1.0e-6'f32
 
@@ -14,38 +16,70 @@ type
   A2aVelocityConstraintPoint* = object
     dense_a*: int
     dense_b*: int
-    normal*: F3
+    axis*: F3
     r_a*: F3
     r_b*: F3
     inv_mass_a*: float32
     inv_mass_b*: float32
-    inv_inertia_times_r_a_cross_n*: F3
-    inv_inertia_times_r_b_cross_n*: F3
+    inv_inertia_times_r_a_cross_axis*: F3
+    inv_inertia_times_r_b_cross_axis*: F3
     effective_mass*: float32
     bias_velocity*: float32
     accumulated_impulse*: float32
+    normal_constraint_idx*: int
 
   A2sVelocityConstraintPoint* = object
     dense_a*: int
-    normal*: F3
+    axis*: F3
     r_a*: F3
     inv_mass_a*: float32
-    inv_inertia_times_r_a_cross_n*: F3
+    inv_inertia_times_r_a_cross_axis*: F3
     effective_mass*: float32
     bias_velocity*: float32
     accumulated_impulse*: float32
+    normal_constraint_idx*: int
 
-  A2aVelocityConstraintSubBuffer* = object
+  A2aNormalVelocityConstraintSubBuffer* = object
     constraints*: seq[A2aVelocityConstraintPoint]
     count*: int
 
-  A2sVelocityConstraintSubBuffer* = object
+  A2sNormalVelocityConstraintSubBuffer* = object
+    constraints*: seq[A2sVelocityConstraintPoint]
+    count*: int
+
+  A2aFrictionVelocityConstraintSubBuffer* = object
+    constraints*: seq[A2aVelocityConstraintPoint]
+    count*: int
+
+  A2sFrictionVelocityConstraintSubBuffer* = object
     constraints*: seq[A2sVelocityConstraintPoint]
     count*: int
 
   VelocityConstraintBuffer* = object
-    a2a*: A2aVelocityConstraintSubBuffer
-    a2s*: A2sVelocityConstraintSubBuffer
+    a2a_normals*: A2aNormalVelocityConstraintSubBuffer
+    a2s_normals*: A2sNormalVelocityConstraintSubBuffer
+    a2a_frictions*: A2aFrictionVelocityConstraintSubBuffer
+    a2s_frictions*: A2sFrictionVelocityConstraintSubBuffer
+
+proc orthonormal_basis(normal: F3): tuple[u, v: F3] =
+  let abs_nx = abs(normal.x)
+  let abs_ny = abs(normal.y)
+  let abs_nz = abs(normal.z)
+  let perp =
+    if abs_nx <= abs_ny and abs_nx <= abs_nz:
+      (0'f32, -normal.z, normal.y)
+    elif abs_ny <= abs_nx and abs_ny <= abs_nz:
+      (normal.z, 0'f32, -normal.x)
+    else:
+      (-normal.y, normal.x, 0'f32)
+  let len = perp.length
+
+  result.u =
+    if len > constraint_epsilon:
+      perp / len
+    else:
+      (0'f32, 1'f32, 0'f32)
+  result.v = normalized(normal × result.u)
 
 proc resolve_dense_idx(data: InternalData, handle: BodyHandle, slot_to_dense: ptr UncheckedArray[int]): int =
   if slot_to_dense.is_nil or handle.slot < 0 or handle.slot >= data.slot_count():
@@ -58,8 +92,91 @@ proc ensure_constraint_capacity[T](constraints: var seq[T], required_capacity: i
   if constraints.len < required_capacity:
     constraints.setLen(required_capacity)
 
+proc append_a2a_constraint(
+  buffer: var seq[A2aVelocityConstraintPoint],
+  count: var int,
+  data: InternalData,
+  dense_a: int,
+  dense_b: int,
+  inv_mass_a: float32,
+  inv_mass_b: float32,
+  r_a: F3,
+  r_b: F3,
+  axis: F3,
+  bias_velocity: float32,
+  normal_constraint_idx: int,
+) =
+  let r_a_cross_axis = r_a × axis
+  let r_b_cross_axis = r_b × axis
+  let inv_inertia_times_r_a_cross_axis =
+    if inv_mass_a > 0'f32:
+      data.apply_inverse_inertia_world(dense_a, r_a_cross_axis)
+    else:
+      (0'f32, 0'f32, 0'f32)
+  let inv_inertia_times_r_b_cross_axis =
+    if inv_mass_b > 0'f32:
+      data.apply_inverse_inertia_world(dense_b, r_b_cross_axis)
+    else:
+      (0'f32, 0'f32, 0'f32)
+
+  let denominator =
+    inv_mass_a +
+    inv_mass_b +
+    (r_a_cross_axis ∙ inv_inertia_times_r_a_cross_axis) +
+    (r_b_cross_axis ∙ inv_inertia_times_r_b_cross_axis)
+  if not denominator.is_finite or denominator <= constraint_epsilon:
+    return
+
+  buffer[count] = A2aVelocityConstraintPoint(
+    dense_a: dense_a,
+    dense_b: dense_b,
+    axis: axis,
+    r_a: r_a,
+    r_b: r_b,
+    inv_mass_a: inv_mass_a,
+    inv_mass_b: inv_mass_b,
+    inv_inertia_times_r_a_cross_axis: inv_inertia_times_r_a_cross_axis,
+    inv_inertia_times_r_b_cross_axis: inv_inertia_times_r_b_cross_axis,
+    effective_mass: 1'f32 / denominator,
+    bias_velocity: bias_velocity,
+    accumulated_impulse: 0'f32,
+    normal_constraint_idx: normal_constraint_idx,
+  )
+  inc count
+
+proc append_a2s_constraint(
+  buffer: var seq[A2sVelocityConstraintPoint],
+  count: var int,
+  data: InternalData,
+  dense_a: int,
+  inv_mass_a: float32,
+  r_a: F3,
+  axis: F3,
+  bias_velocity: float32,
+  normal_constraint_idx: int,
+) =
+  let r_a_cross_axis = r_a × axis
+  let inv_inertia_times_r_a_cross_axis = data.apply_inverse_inertia_world(dense_a, r_a_cross_axis)
+  let denominator = inv_mass_a + (r_a_cross_axis ∙ inv_inertia_times_r_a_cross_axis)
+  if not denominator.is_finite or denominator <= constraint_epsilon:
+    return
+
+  buffer[count] = A2sVelocityConstraintPoint(
+    dense_a: dense_a,
+    axis: axis,
+    r_a: r_a,
+    inv_mass_a: inv_mass_a,
+    inv_inertia_times_r_a_cross_axis: inv_inertia_times_r_a_cross_axis,
+    effective_mass: 1'f32 / denominator,
+    bias_velocity: bias_velocity,
+    accumulated_impulse: 0'f32,
+    normal_constraint_idx: normal_constraint_idx,
+  )
+  inc count
+
 proc append_constraints_from_a2a_manifold(
-  buffer: var A2aVelocityConstraintSubBuffer,
+  normal_buffer: var A2aNormalVelocityConstraintSubBuffer,
+  friction_buffer: var A2aFrictionVelocityConstraintSubBuffer,
   data: InternalData,
   manifold: A2aCollisionManifold,
   dt: float32,
@@ -91,26 +208,6 @@ proc append_constraints_from_a2a_manifold(
     let point_a = point_b - normal * penetration_depth
     let r_a = point_a - centers[dense_a]
     let r_b = point_b - centers[dense_b]
-    let r_a_cross_n = r_a × normal
-    let r_b_cross_n = r_b × normal
-    let inv_inertia_times_r_a_cross_n =
-      if inv_mass_a > 0'f32:
-        data.apply_inverse_inertia_world(dense_a, r_a_cross_n)
-      else:
-        (0'f32, 0'f32, 0'f32)
-    let inv_inertia_times_r_b_cross_n =
-      if inv_mass_b > 0'f32:
-        data.apply_inverse_inertia_world(dense_b, r_b_cross_n)
-      else:
-        (0'f32, 0'f32, 0'f32)
-
-    let denominator =
-      inv_mass_a +
-      inv_mass_b +
-      (r_a_cross_n ∙ inv_inertia_times_r_a_cross_n) +
-      (r_b_cross_n ∙ inv_inertia_times_r_b_cross_n)
-    if not denominator.is_finite or denominator <= constraint_epsilon:
-      continue
 
     let penetration_error = max(penetration_depth - baumgarte_slop, 0'f32)
     let bias_velocity =
@@ -119,24 +216,54 @@ proc append_constraints_from_a2a_manifold(
       else:
         0'f32
 
-    buffer.constraints[buffer.count] = A2aVelocityConstraintPoint(
-      dense_a: dense_a,
-      dense_b: dense_b,
-      normal: normal,
-      r_a: r_a,
-      r_b: r_b,
-      inv_mass_a: inv_mass_a,
-      inv_mass_b: inv_mass_b,
-      inv_inertia_times_r_a_cross_n: inv_inertia_times_r_a_cross_n,
-      inv_inertia_times_r_b_cross_n: inv_inertia_times_r_b_cross_n,
-      effective_mass: 1'f32 / denominator,
-      bias_velocity: bias_velocity,
-      accumulated_impulse: 0'f32,
+    let normal_constraint_idx = normal_buffer.count
+    normal_buffer.constraints.append_a2a_constraint(
+      normal_buffer.count,
+      data,
+      dense_a,
+      dense_b,
+      inv_mass_a,
+      inv_mass_b,
+      r_a,
+      r_b,
+      normal,
+      bias_velocity,
+      -1,
     )
-    inc buffer.count
+    if normal_buffer.count == normal_constraint_idx:
+      continue
+
+    let tangents = orthonormal_basis(normal)
+    friction_buffer.constraints.append_a2a_constraint(
+      friction_buffer.count,
+      data,
+      dense_a,
+      dense_b,
+      inv_mass_a,
+      inv_mass_b,
+      r_a,
+      r_b,
+      tangents.u,
+      0'f32,
+      normal_constraint_idx,
+    )
+    friction_buffer.constraints.append_a2a_constraint(
+      friction_buffer.count,
+      data,
+      dense_a,
+      dense_b,
+      inv_mass_a,
+      inv_mass_b,
+      r_a,
+      r_b,
+      tangents.v,
+      0'f32,
+      normal_constraint_idx,
+    )
 
 proc append_constraints_from_a2s_manifold(
-  buffer: var A2sVelocityConstraintSubBuffer,
+  normal_buffer: var A2sNormalVelocityConstraintSubBuffer,
+  friction_buffer: var A2sFrictionVelocityConstraintSubBuffer,
   data: InternalData,
   manifold: A2sCollisionManifold,
   dt: float32,
@@ -164,11 +291,6 @@ proc append_constraints_from_a2s_manifold(
     let point_b = contact.position
     let point_a = point_b - normal * penetration_depth
     let r_a = point_a - centers[dense_a]
-    let r_a_cross_n = r_a × normal
-    let inv_inertia_times_r_a_cross_n = data.apply_inverse_inertia_world(dense_a, r_a_cross_n)
-    let denominator = inv_mass_a + (r_a_cross_n ∙ inv_inertia_times_r_a_cross_n)
-    if not denominator.is_finite or denominator <= constraint_epsilon:
-      continue
 
     let penetration_error = max(penetration_depth - baumgarte_slop, 0'f32)
     let bias_velocity =
@@ -177,18 +299,41 @@ proc append_constraints_from_a2s_manifold(
       else:
         0'f32
 
-    # echo "  added A2sVelocityConstraintPoint"
-    buffer.constraints[buffer.count] = A2sVelocityConstraintPoint(
-      dense_a: dense_a,
-      normal: normal,
-      r_a: r_a,
-      inv_mass_a: inv_mass_a,
-      inv_inertia_times_r_a_cross_n: inv_inertia_times_r_a_cross_n,
-      effective_mass: 1'f32 / denominator,
-      bias_velocity: bias_velocity,
-      accumulated_impulse: 0'f32,
+    let normal_constraint_idx = normal_buffer.count
+    normal_buffer.constraints.append_a2s_constraint(
+      normal_buffer.count,
+      data,
+      dense_a,
+      inv_mass_a,
+      r_a,
+      normal,
+      bias_velocity,
+      -1,
     )
-    inc buffer.count
+    if normal_buffer.count == normal_constraint_idx:
+      continue
+
+    let tangents = orthonormal_basis(normal)
+    friction_buffer.constraints.append_a2s_constraint(
+      friction_buffer.count,
+      data,
+      dense_a,
+      inv_mass_a,
+      r_a,
+      tangents.u,
+      0'f32,
+      normal_constraint_idx,
+    )
+    friction_buffer.constraints.append_a2s_constraint(
+      friction_buffer.count,
+      data,
+      dense_a,
+      inv_mass_a,
+      r_a,
+      tangents.v,
+      0'f32,
+      normal_constraint_idx,
+    )
 
 proc precompute_velocity_constraints*(
   buffer: var VelocityConstraintBuffer,
@@ -196,31 +341,32 @@ proc precompute_velocity_constraints*(
   pool: NarrowphasePool,
   dt: float32,
 ) =
-  # echo "precompute_velocity_constraints"
-  buffer.a2a.count = 0
-  buffer.a2s.count = 0
+  buffer.a2a_normals.count = 0
+  buffer.a2s_normals.count = 0
+  buffer.a2a_frictions.count = 0
+  buffer.a2s_frictions.count = 0
 
   let slot_to_dense = data.slot_to_dense_ptr()
   let centers = data.cached_center_ptr()
   if slot_to_dense.is_nil or centers.is_nil:
     return
 
-  var required_a2a_capacity = 0
-  var required_a2s_capacity = 0
+  var required_a2a_normal_capacity = 0
+  var required_a2s_normal_capacity = 0
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
     for manifold_idx in 0 ..< manifold_count:
       let result = pool.worker_output_at(worker_idx, manifold_idx)
       case result.kind
       of nrk_a2a:
-        required_a2a_capacity += result.a2a.contact_count.int
+        required_a2a_normal_capacity += result.a2a.contact_count.int
       of nrk_a2s:
-        required_a2s_capacity += result.a2s.contact_count.int
+        required_a2s_normal_capacity += result.a2s.contact_count.int
 
-  # echo "required_a2s_capacity=", required_a2s_capacity
-
-  buffer.a2a.constraints.ensure_constraint_capacity(required_a2a_capacity)
-  buffer.a2s.constraints.ensure_constraint_capacity(required_a2s_capacity)
+  buffer.a2a_normals.constraints.ensure_constraint_capacity(required_a2a_normal_capacity)
+  buffer.a2s_normals.constraints.ensure_constraint_capacity(required_a2s_normal_capacity)
+  buffer.a2a_frictions.constraints.ensure_constraint_capacity(2 * required_a2a_normal_capacity)
+  buffer.a2s_frictions.constraints.ensure_constraint_capacity(2 * required_a2s_normal_capacity)
 
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
@@ -228,19 +374,41 @@ proc precompute_velocity_constraints*(
       let result = pool.worker_output_at(worker_idx, manifold_idx)
       case result.kind
       of nrk_a2a:
-        buffer.a2a.append_constraints_from_a2a_manifold(data, result.a2a, dt, slot_to_dense, centers)
+        buffer.a2a_normals.append_constraints_from_a2a_manifold(
+          buffer.a2a_frictions,
+          data,
+          result.a2a,
+          dt,
+          slot_to_dense,
+          centers,
+        )
       of nrk_a2s:
-        # echo "  result.a2s=", result.a2s
-        buffer.a2s.append_constraints_from_a2s_manifold(data, result.a2s, dt, slot_to_dense, centers)
+        buffer.a2s_normals.append_constraints_from_a2s_manifold(
+          buffer.a2s_frictions,
+          data,
+          result.a2s,
+          dt,
+          slot_to_dense,
+          centers,
+        )
+
+proc relative_point_velocity(data: InternalData, dense_idx: int, r: F3): F3 =
+  data.vel[dense_idx] + (data.ω[dense_idx] × r)
+
+proc constraint_axis_velocity(data: InternalData, constraint: A2aVelocityConstraintPoint): float32 =
+  let v_a = data.relative_point_velocity(constraint.dense_a, constraint.r_a)
+  let v_b = data.relative_point_velocity(constraint.dense_b, constraint.r_b)
+  (v_a - v_b) ∙ constraint.axis
+
+proc constraint_axis_velocity(data: InternalData, constraint: A2sVelocityConstraintPoint): float32 =
+  let v_a = data.relative_point_velocity(constraint.dense_a, constraint.r_a)
+  v_a ∙ constraint.axis
 
 proc constraint_normal_velocity*(data: InternalData, constraint: A2aVelocityConstraintPoint): float32 =
-  let v_a = data.vel[constraint.dense_a] + (data.ω[constraint.dense_a] × constraint.r_a)
-  let v_b = data.vel[constraint.dense_b] + (data.ω[constraint.dense_b] × constraint.r_b)
-  (v_a - v_b) ∙ constraint.normal
+  data.constraint_axis_velocity(constraint)
 
 proc constraint_normal_velocity*(data: InternalData, constraint: A2sVelocityConstraintPoint): float32 =
-  let v_a = data.vel[constraint.dense_a] + (data.ω[constraint.dense_a] × constraint.r_a)
-  v_a ∙ constraint.normal
+  data.constraint_axis_velocity(constraint)
 
 proc constraint_residual*(data: InternalData, constraint: A2aVelocityConstraintPoint): float32 =
   max(constraint.bias_velocity - data.constraint_normal_velocity(constraint), 0'f32)
@@ -248,67 +416,90 @@ proc constraint_residual*(data: InternalData, constraint: A2aVelocityConstraintP
 proc constraint_residual*(data: InternalData, constraint: A2sVelocityConstraintPoint): float32 =
   max(constraint.bias_velocity - data.constraint_normal_velocity(constraint), 0'f32)
 
-proc solve_a2a_velocity_constraints_iteration*(
-  buffer: var A2aVelocityConstraintSubBuffer,
+proc apply_delta_impulse(data: InternalData, constraint: A2aVelocityConstraintPoint, delta_impulse: float32) =
+  let linear_impulse = delta_impulse * constraint.axis
+
+  if constraint.inv_mass_a > 0'f32:
+    data.vel[constraint.dense_a] += linear_impulse * constraint.inv_mass_a
+    data.ω[constraint.dense_a] += constraint.inv_inertia_times_r_a_cross_axis * delta_impulse
+
+  if constraint.inv_mass_b > 0'f32:
+    data.vel[constraint.dense_b] = data.vel[constraint.dense_b] - linear_impulse * constraint.inv_mass_b
+    data.ω[constraint.dense_b] = data.ω[constraint.dense_b] - constraint.inv_inertia_times_r_b_cross_axis * delta_impulse
+
+proc apply_delta_impulse(data: InternalData, constraint: A2sVelocityConstraintPoint, delta_impulse: float32) =
+  let linear_impulse = delta_impulse * constraint.axis
+  data.vel[constraint.dense_a] += linear_impulse * constraint.inv_mass_a
+  data.ω[constraint.dense_a] += constraint.inv_inertia_times_r_a_cross_axis * delta_impulse
+
+proc solve_velocity_constraint_row[T](
+  constraint: var T,
+  data: InternalData,
+  sor: float32,
+  lower_impulse: float32,
+  upper_impulse: float32,
+) =
+  let axis_velocity = data.constraint_axis_velocity(constraint)
+  let candidate_impulse =
+    constraint.accumulated_impulse -
+    sor * constraint.effective_mass * (axis_velocity - constraint.bias_velocity)
+  let new_impulse = clamp(candidate_impulse, lower_impulse, upper_impulse)
+  let delta_impulse = new_impulse - constraint.accumulated_impulse
+  if abs(delta_impulse) <= constraint_epsilon:
+    return
+
+  constraint.accumulated_impulse = new_impulse
+  data.apply_delta_impulse(constraint, delta_impulse)
+
+proc solve_a2a_normal_velocity_constraints_iteration*(
+  buffer: var A2aNormalVelocityConstraintSubBuffer,
   data: InternalData,
   sor: float32,
 ) =
   for constraint_idx in 0 ..< buffer.count:
-    let constraint = addr buffer.constraints[constraint_idx]
-    let normal_velocity = data.constraint_normal_velocity(constraint[])
-    let candidate_impulse =
-      constraint[].accumulated_impulse -
-      sor * constraint[].effective_mass * (normal_velocity - constraint[].bias_velocity)
-    let new_impulse = max(candidate_impulse, 0'f32)
-    let delta_impulse = new_impulse - constraint[].accumulated_impulse
-    if abs(delta_impulse) <= constraint_epsilon:
-      continue
+    solve_velocity_constraint_row(buffer.constraints[constraint_idx], data, sor, 0'f32, high(float32))
 
-    constraint[].accumulated_impulse = new_impulse
-    let linear_impulse = delta_impulse * constraint[].normal
-
-    if constraint[].inv_mass_a > 0'f32:
-      data.vel[constraint[].dense_a] += linear_impulse * constraint[].inv_mass_a
-      data.ω[constraint[].dense_a] += constraint[].inv_inertia_times_r_a_cross_n * delta_impulse
-
-    if constraint[].inv_mass_b > 0'f32:
-      data.vel[constraint[].dense_b] = data.vel[constraint[].dense_b] - linear_impulse * constraint[].inv_mass_b
-      data.ω[constraint[].dense_b] = data.ω[constraint[].dense_b] - constraint[].inv_inertia_times_r_b_cross_n * delta_impulse
-
-proc solve_a2s_velocity_constraints_iteration*(
-  buffer: var A2sVelocityConstraintSubBuffer,
+proc solve_a2s_normal_velocity_constraints_iteration*(
+  buffer: var A2sNormalVelocityConstraintSubBuffer,
   data: InternalData,
   sor: float32,
 ) =
-  # echo "solve_a2s_velocity_constraints_iteration, buffer.count=", buffer.count
   for constraint_idx in 0 ..< buffer.count:
-    let constraint = addr buffer.constraints[constraint_idx]
-    let normal_velocity = data.constraint_normal_velocity(constraint[])
-    let candidate_impulse =
-      constraint[].accumulated_impulse -
-      sor * constraint[].effective_mass * (normal_velocity - constraint[].bias_velocity)
-    let new_impulse = max(candidate_impulse, 0'f32)
-    let delta_impulse = new_impulse - constraint[].accumulated_impulse
-    if abs(delta_impulse) <= constraint_epsilon:
-      continue
+    solve_velocity_constraint_row(buffer.constraints[constraint_idx], data, sor, 0'f32, high(float32))
 
-    constraint[].accumulated_impulse = new_impulse
-    let linear_impulse = delta_impulse * constraint[].normal
+proc solve_a2a_friction_velocity_constraints_iteration*(
+  buffer: var A2aFrictionVelocityConstraintSubBuffer,
+  data: InternalData,
+  normal_buffer: A2aNormalVelocityConstraintSubBuffer,
+  sor: float32,
+) =
+  for constraint_idx in 0 ..< buffer.count:
+    let normal_impulse = normal_buffer.constraints[buffer.constraints[constraint_idx].normal_constraint_idx].accumulated_impulse
+    let friction_limit = friction_coefficient * normal_impulse
+    solve_velocity_constraint_row(buffer.constraints[constraint_idx], data, sor, -friction_limit, friction_limit)
 
-    # echo "  linear_impulse=", linear_impulse
-    # echo "  normal_=", constraint[].normal
-    # echo "  normal_velocity=", normal_velocity
-    # echo "  bias_velocity=", constraint[].bias_velocity
-
-    data.vel[constraint[].dense_a] += linear_impulse * constraint[].inv_mass_a
-    data.ω[constraint[].dense_a] += constraint[].inv_inertia_times_r_a_cross_n * delta_impulse
+proc solve_a2s_friction_velocity_constraints_iteration*(
+  buffer: var A2sFrictionVelocityConstraintSubBuffer,
+  data: InternalData,
+  normal_buffer: A2sNormalVelocityConstraintSubBuffer,
+  sor: float32,
+) =
+  for constraint_idx in 0 ..< buffer.count:
+    let normal_impulse = normal_buffer.constraints[buffer.constraints[constraint_idx].normal_constraint_idx].accumulated_impulse
+    let friction_limit = friction_coefficient * normal_impulse
+    solve_velocity_constraint_row(buffer.constraints[constraint_idx], data, sor, -friction_limit, friction_limit)
 
 proc solve_velocity_constraints*(
   buffer: var VelocityConstraintBuffer,
   data: InternalData,
-  iterations: int,
+  normal_iterations: int,
+  friction_iterations: int,
   sor: float32,
 ) =
-  for _ in 0 ..< iterations:
-    buffer.a2a.solve_a2a_velocity_constraints_iteration(data, sor)
-    buffer.a2s.solve_a2s_velocity_constraints_iteration(data, sor)
+  for _ in 0 ..< normal_iterations:
+    buffer.a2a_normals.solve_a2a_normal_velocity_constraints_iteration(data, sor)
+    buffer.a2s_normals.solve_a2s_normal_velocity_constraints_iteration(data, sor)
+
+  for _ in 0 ..< friction_iterations:
+    buffer.a2a_frictions.solve_a2a_friction_velocity_constraints_iteration(data, buffer.a2a_normals, sor)
+    buffer.a2s_frictions.solve_a2s_friction_velocity_constraints_iteration(data, buffer.a2s_normals, sor)

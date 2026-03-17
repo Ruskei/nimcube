@@ -168,7 +168,7 @@ proc tick_world*(world_index: int) =
     data.vel[i] += world.acceleration * Δt
 
   world.velocity_constraints.precompute_velocity_constraints(data, world.narrowphase_pool, Δt)
-  world.velocity_constraints.solve_velocity_constraints(data, velocity_solve_iterations, velocity_solve_sor)
+  world.velocity_constraints.solve_velocity_constraints(data, normal_iterations, friction_iterations, velocity_solve_sor)
 
   let constraint_solving = get_mono_time()
 
