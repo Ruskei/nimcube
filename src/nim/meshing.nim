@@ -2,7 +2,6 @@ import std/bitops
 import std/times
 import std/monotimes
 
-import dynamic_aabb_tree
 import physics_math
 
 const
@@ -13,10 +12,11 @@ const
 type
   ## y-z-x order, lsb is first bit
   ChunkBinaryData* = array[chunk_width * chunk_width * chunk_height div 64, uint64]
-  ChunkMesh* = ref object
+  ChunkMeshObj = object
     origin*: I3
-    bbs*: seq[FBB] ## relative to origin
-    aabb_tree*: DynamicAabbTree[int]
+    bbs*: ptr UncheckedArray[FBB] ## relative to origin
+    bb_count*: int
+  ChunkMesh* = ptr ChunkMeshObj
 
 converter i3_to_f3*(v: V3[int]): F3 =
   (
@@ -115,6 +115,26 @@ proc build_exposed_rows(solid_rows: ptr PackedRows): seq[uint64] =
         exposed_y_neg or exposed_y_pos or
         exposed_z_neg or exposed_z_pos
 
+iterator query*(mesh: ChunkMesh, aabb: FBB): int =
+  if not mesh.is_nil:
+    for idx in 0 ..< mesh.bb_count:
+      if mesh.bbs[idx].overlaps(aabb):
+        yield idx
+
+proc deinit_chunk_mesh*(mesh: ChunkMesh) =
+  if mesh.is_nil:
+    return
+
+  if mesh.bbs != nil:
+    deallocShared(mesh.bbs)
+  mesh.bb_count = 0
+  deallocShared(mesh)
+
+proc deinit_chunk_meshes*() =
+  for mesh in chunk_meshes:
+    deinit_chunk_mesh(mesh)
+  reset chunk_meshes
+
 proc build_chunk_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
@@ -122,7 +142,6 @@ proc build_chunk_mesh*(
   let start = get_mono_time()
 
   var bbs: seq[FBB]
-  var aabb_tree = init_dynamic_aabb_tree[int](fat_margin = 0'f32)
 
   let solid_rows = cast[ptr PackedRows](chunk_binary_data)
   var exposed_storage = build_exposed_rows(solid_rows)
@@ -155,17 +174,17 @@ proc build_chunk_mesh*(
         clear_box_from_exposed(exposed_rows, y_start, y_end, z_start, z_end, x_mask)
 
         let bb: FBB = (min: (x_start, y_start, z_start), max: (x_start + x_length, y_end + 1, z_end + 1))
-        discard aabb_tree.insert(bb, bbs.len)
         bbs.add bb
 
         seed_row_bits = exposed_rows[seed_row_index]
 
   let origin = (origin_x.int32, origin_y.int32, origin_z.int32)
-  result = ChunkMesh(
-    origin: origin,
-    bbs: move(bbs),
-    aabb_tree: move(aabb_tree),
-  )
+  result = createShared(ChunkMeshObj)
+  result.origin = origin
+  result.bb_count = bbs.len
+  if bbs.len > 0:
+    result.bbs = cast[ptr UncheckedArray[FBB]](allocShared0((bbs.len * sizeof(FBB)).Natural))
+    copyMem(result.bbs, unsafeAddr bbs[0], bbs.len * sizeof(FBB))
 
   let finish = get_mono_time()
 
@@ -176,7 +195,7 @@ proc greedy_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
 ): cint =
-  var chunk_mesh = build_chunk_mesh(origin_x, origin_y, origin_z, chunk_binary_data)
+  let chunk_mesh = build_chunk_mesh(origin_x, origin_y, origin_z, chunk_binary_data)
   let idx = chunk_meshes.len
-  chunk_meshes.add move(chunk_mesh)
+  chunk_meshes.add chunk_mesh
   result = idx.cint

@@ -1,6 +1,5 @@
 import std/math
 import std/tables
-import std/times
 import std/monotimes
 
 import chunk_positions
@@ -16,7 +15,7 @@ import rw_lock
 export chunk_positions
 
 type
-  World* = ref object
+  WorldObj = object
     valid*: bool
     internal_data*: InternalData
     external_data*: ExternalData
@@ -33,8 +32,10 @@ type
     a2s_warm_start: TableRef[A2sWarmStartKey, A2sWarmStartEntry]
     a2a_contact_manifolds: seq[A2aCollisionManifold]
     a2s_contact_manifolds: seq[A2sCollisionManifold]
+  World* = ptr WorldObj
 
-var worlds*: seq[World]
+const max_worlds* = 1024
+var worlds*: array[max_worlds, World]
 const chunk_range_epsilon = 1.0e-5'f32
 
 proc floor_div(value, divisor: int32): int32 {.inline.} =
@@ -61,27 +62,47 @@ proc chunk_range_from_world_aabb*(aabb: FBB): tuple[min_chunk_x, max_chunk_x, mi
     max_chunk_z: floor_chunk_coord(max_z),
   )
 
+proc world_at*(world_index: int): World {.inline.} =
+  if world_index < 0 or world_index >= max_worlds:
+    return nil
+  worlds[world_index]
+
 proc init_world*(Δt: float32, acceleration: F3): World =
-  result = World(
-    valid: true,
-    internal_data: InternalData(),
-    external_data: init_external_data(),
-    Δt: Δt,
-    acceleration: acceleration,
-    command_queue: CommandQueue(),
-    aabb_tree: init_dynamic_aabb_tree[BodyHandle](fat_margin = 0.3'f32),
-    chunk_meshes_by_position: init_table[ChunkPosition, ChunkMesh](),
-    narrowphase_pool: init_narrowphase_pool(),
-    a2a_warm_start: newTable[A2aWarmStartKey, A2aWarmStartEntry](),
-    a2s_warm_start: newTable[A2sWarmStartKey, A2sWarmStartEntry](),
+  result = createShared(WorldObj)
+  result.valid = true
+  result.internal_data = InternalData()
+  init_external_data(result.external_data)
+  result.Δt = Δt
+  result.acceleration = acceleration
+  init_command_queue(result.command_queue)
+  result.aabb_tree = init_dynamic_aabb_tree[BodyHandle](fat_margin = 0.3'f32)
+  result.chunk_meshes_by_position = init_table[ChunkPosition, ChunkMesh]()
+  result.narrowphase_pool = init_narrowphase_pool()
+  result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
+  result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
+
+proc add_chunk_mesh*(world: World, chunk_pos: ChunkPosition, chunk_binary_data: ptr ChunkBinaryData): bool =
+  if world.is_nil or not world.valid or chunk_binary_data.is_nil:
+    return false
+
+  let origin_x = (chunk_pos.x * chunk_width.int32).cint
+  let origin_z = (chunk_pos.z * chunk_width.int32).cint
+  let chunk_mesh = build_chunk_mesh(origin_x, chunk_mesh_min_y.cint, origin_z, chunk_binary_data)
+
+  world.command_queue.add Command(
+    kind: ck_add_mesh,
+    chunk_x: chunk_pos.x,
+    chunk_z: chunk_pos.z,
+    chunk_mesh: chunk_mesh,
   )
+  result = true
 
 proc tick_world*(world_index: int) =
   let start = get_mono_time()
 
-  if world_index >= worlds.len: return
-  var world = worlds[world_index]
-  if not world.valid: return
+  let world = world_at(world_index)
+  if world.is_nil or not world.valid:
+    return
 
   let data = world.internal_data
 
@@ -130,8 +151,7 @@ proc tick_world*(world_index: int) =
             max: body_aabb.max - mesh_origin,
           )
 
-          for leaf_idx in mesh.aabb_tree.query(local_query):
-            let bb_idx = mesh.aabb_tree.data(leaf_idx)
+          for bb_idx in mesh.query(local_query):
             let local_bb = mesh.bbs[bb_idx]
             let world_bb: FBB = (
               min: local_bb.min + mesh_origin,
@@ -145,17 +165,17 @@ proc tick_world*(world_index: int) =
 
   let narrowphase = get_mono_time()
 
-  # world.a2a_contact_manifolds.setLen(0)
-  # world.a2s_contact_manifolds.setLen(0)
-  # for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
-  #   let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
-  #   for output_idx in 0 ..< worker_count:
-  #     let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
-  #     case result.kind
-  #     of nrk_a2a:
-  #       world.a2a_contact_manifolds.add result.a2a
-  #     of nrk_a2s:
-  #       world.a2s_contact_manifolds.add result.a2s
+  world.a2a_contact_manifolds.setLen(0)
+  world.a2s_contact_manifolds.setLen(0)
+  for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
+    let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
+    for output_idx in 0 ..< worker_count:
+      let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
+      case result.kind
+      of nrk_a2a:
+        world.a2a_contact_manifolds.add result.a2a
+      of nrk_a2s:
+        world.a2s_contact_manifolds.add result.a2s
 
   let Δt = world.Δt
   for i in 0 ..< data.local_pos.len:
@@ -197,32 +217,55 @@ proc tick_world*(world_index: int) =
   # echo "| constraint_solving=", in_microseconds(constraint_solving - narrowphase), "μs"
   # echo "| integrating=", in_microseconds(integrating - constraint_solving), "μs"
 
-proc deinit_world*(world: World) =
-  if world.is_nil or not world.valid:
+proc deinit_world*(world: var World) =
+  if world.is_nil:
     return
 
-  deinit_narrowphase_pool(world.narrowphase_pool)
-  deinit_rw_lock(world.external_data.lock)
   world.valid = false
+  deinit_command_queue(world.command_queue)
+
+  for _, mesh in world.chunk_meshes_by_position:
+    deinit_chunk_mesh(mesh)
+
+  if not world.narrowphase_pool.is_nil:
+    deinit_narrowphase_pool(world.narrowphase_pool)
+  deinit_external_data(world.external_data)
+
+  reset world.internal_data
+  reset world.aabb_tree
+  reset world.chunk_meshes_by_position
+  reset world.narrowphase_pool
+  reset world.velocity_constraints
+  reset world.a2a_warm_start
+  reset world.a2s_warm_start
+  reset world.a2a_contact_manifolds
+  reset world.a2s_contact_manifolds
+
+  `=destroy`(world[])
+  deallocShared(world)
+  world = nil
 
 proc deinit_worlds*() =
-  for world in worlds:
-    world.deinit_world()
+  for idx in 0 ..< max_worlds:
+    deinit_world(worlds[idx])
 
 proc global_pos*(world: World, handle: BodyHandle): D3 =
   with_read_lock(world.external_data.lock):
-    if world.external_data.is_valid_no_lock(handle):
-      result = world.external_data.pos[world.external_data.slot_to_dense[handle.slot]]
+    let dense = world.external_data.dense_idx_no_lock(handle)
+    if dense >= 0:
+      result = world.external_data.pos[dense]
 
 proc global_rot*(world: World, handle: BodyHandle): QF =
   with_read_lock(world.external_data.lock):
-    if world.external_data.is_valid_no_lock(handle):
-      result = world.external_data.rot[world.external_data.slot_to_dense[handle.slot]]
+    let dense = world.external_data.dense_idx_no_lock(handle)
+    if dense >= 0:
+      result = world.external_data.rot[dense]
 
 proc global_dimensions*(world: World, handle: BodyHandle): F3 =
   with_read_lock(world.external_data.lock):
-    if world.external_data.is_valid_no_lock(handle):
-      result = world.external_data.dimensions[world.external_data.slot_to_dense[handle.slot]]
+    let dense = world.external_data.dense_idx_no_lock(handle)
+    if dense >= 0:
+      result = world.external_data.dimensions[dense]
 
 proc aabb_tree_leaf_count*(world: World): int =
   world.aabb_tree.leaf_count

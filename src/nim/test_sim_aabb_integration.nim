@@ -23,8 +23,7 @@ proc make_bb(
 
 proc fresh_world(dt = 0.1'f32, acceleration: F3 = (0'f32, 0'f32, 0'f32)): World =
   deinit_worlds()
-  worlds.set_len(0)
-  worlds.add init_world(dt, acceleration)
+  worlds[0] = init_world(dt, acceleration)
   worlds[0]
 
 proc set_solid_voxel(data: var ChunkBinaryData, x, y, z: int) =
@@ -85,13 +84,13 @@ proc test_add_chunk_mesh_inserts_into_world_table() =
   let chunk_pos = chunk_position(0, 0)
 
   doAssert world.add_chunk_mesh(chunk_pos, addr chunk_binary_data)
+  tick_world(0)
   doAssert world.chunk_meshes_by_position.len == 1
   doAssert world.chunk_meshes_by_position.hasKey(chunk_pos)
 
   let mesh = world.chunk_meshes_by_position[chunk_pos]
   doAssert mesh.origin == (0'i32, chunk_mesh_min_y.int32, 0'i32)
-  doAssert mesh.bbs.len > 0
-  doAssert mesh.aabb_tree.leaf_count == mesh.bbs.len
+  doAssert mesh.bb_count > 0
 
 proc test_add_chunk_mesh_replaces_existing_position() =
   let world = fresh_world()
@@ -100,15 +99,16 @@ proc test_add_chunk_mesh_replaces_existing_position() =
   var second_chunk_binary_data = make_chunk_binary_data(@[(1, 0, 1), (3, 0, 1)])
 
   doAssert world.add_chunk_mesh(chunk_pos, addr first_chunk_binary_data)
+  tick_world(0)
   let first_mesh = world.chunk_meshes_by_position[chunk_pos]
-  doAssert first_mesh.bbs.len == 1
+  doAssert first_mesh.bb_count == 1
 
   doAssert world.add_chunk_mesh(chunk_pos, addr second_chunk_binary_data)
+  tick_world(0)
   doAssert world.chunk_meshes_by_position.len == 1
 
   let second_mesh = world.chunk_meshes_by_position[chunk_pos]
-  doAssert second_mesh.bbs.len == 2
-  doAssert second_mesh.aabb_tree.leaf_count == 2
+  doAssert second_mesh.bb_count == 2
 
 proc test_add_chunk_mesh_stores_multiple_positions() =
   let world = fresh_world()
@@ -119,6 +119,7 @@ proc test_add_chunk_mesh_stores_multiple_positions() =
 
   doAssert world.add_chunk_mesh(first_pos, addr first_chunk_binary_data)
   doAssert world.add_chunk_mesh(second_pos, addr second_chunk_binary_data)
+  tick_world(0)
   doAssert world.chunk_meshes_by_position.len == 2
   doAssert world.chunk_meshes_by_position.hasKey(first_pos)
   doAssert world.chunk_meshes_by_position.hasKey(second_pos)
@@ -130,6 +131,7 @@ proc test_chunk_position_from_negative_world_coords() =
 
   doAssert chunk_pos == chunk_position(-1, -1)
   doAssert world.add_chunk_mesh(chunk_pos, addr chunk_binary_data)
+  tick_world(0)
   doAssert world.chunk_meshes_by_position.hasKey(chunk_pos)
   doAssert world.chunk_meshes_by_position[chunk_pos].origin == (
     -chunk_width.int32,

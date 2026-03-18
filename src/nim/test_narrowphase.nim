@@ -61,8 +61,7 @@ proc make_a2s_hit(
 
 proc fresh_world(dt = 0.1'f32, acceleration: F3 = (0'f32, 0'f32, 0'f32)): World =
   deinit_worlds()
-  worlds.set_len(0)
-  worlds.add init_world(dt, acceleration)
+  worlds[0] = init_world(dt, acceleration)
   worlds[0]
 
 proc enqueue_add(

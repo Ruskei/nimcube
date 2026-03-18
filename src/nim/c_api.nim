@@ -111,12 +111,19 @@ proc to_c(manifold: A2sCollisionManifold): C_A2sCollisionManifold =
   for idx in 0 ..< manifold.contact_points.len:
     result.contact_points[idx] = manifold.contact_points[idx].to_c()
 
+proc get_world(world_index: cint): World =
+  result = world_at(world_index.int)
+  if result.is_nil or not result.valid:
+    result = nil
+
 proc c_create_world(
   Δt, acceleration_x, acceleration_y, acceleration_z: float32
 ): cint {.cdecl, exportc, dynlib.} =
-  let index = worlds.len
-  worlds.add init_world(Δt, (acceleration_x, acceleration_y, acceleration_z))
-  result = index.cint
+  for index in 0 ..< max_worlds:
+    if worlds[index].is_nil:
+      worlds[index] = init_world(Δt, (acceleration_x, acceleration_y, acceleration_z))
+      return index.cint
+  result = -1
 
 proc c_tick_world(
   world_index: cint
@@ -133,9 +140,9 @@ proc c_create_cuboid(
   dimensions_x, dimensions_y, dimensions_z: float32;
   inverse_mass: float32;
 ): bool {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return false
-  let world = worlds[world_index]
-  if not world.valid: return false
+  let world = get_world(world_index)
+  if world.is_nil:
+    return false
 
   world.command_queue.add Command(
     kind: ck_add,
@@ -151,9 +158,9 @@ proc c_create_cuboid(
   result = true
 
 proc c_remove_cuboid(world_index: cint, handle: PackedHandle): bool {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return false
-  let world = worlds[world_index]
-  if not world.valid: return false
+  let world = get_world(world_index)
+  if world.is_nil:
+    return false
   if not world.external_data.is_valid handle: return false
 
   world.command_queue.add Command(
@@ -164,29 +171,28 @@ proc c_remove_cuboid(world_index: cint, handle: PackedHandle): bool {.cdecl, exp
   result = true
 
 proc c_is_valid(world_index: cint, handle: PackedHandle): bool {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return false
-  let world = worlds[world_index]
-  if not world.valid: return false
+  let world = get_world(world_index)
+  if world.is_nil:
+    return false
 
   result = world.external_data.is_valid handle
 
 proc c_num_bodies(world_index: cint): cint {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return -1
-  let world = worlds[world_index]
-  if not world.valid: return -1
+  let world = get_world(world_index)
+  if world.is_nil:
+    return -1
 
   with_read_lock(world.external_data.lock):
-    result = world.external_data.pos.len.cint
+    result = world.external_data.body_count.cint
 
 proc c_get_body(world_index: cint, body_index: cint): C_BodyExternalData {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return invalid_body_external_data()
-  let world = worlds[world_index]
-  if not world.valid: return invalid_body_external_data()
+  let world = get_world(world_index)
+  if world.is_nil: return invalid_body_external_data()
   if body_index < 0: return invalid_body_external_data()
 
   with_read_lock(world.external_data.lock):
     let dense = body_index.int
-    if dense >= world.external_data.pos.len:
+    if dense >= world.external_data.body_count:
       return invalid_body_external_data()
 
     let pos = world.external_data.pos[dense]
@@ -202,33 +208,28 @@ proc c_get_body(world_index: cint, body_index: cint): C_BodyExternalData {.cdecl
     )
 
 proc c_get_global_cuboid_pos(world_index: cint, handle: PackedHandle): C_D3 {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
-  let world = worlds[world_index]
-  if not world.valid: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
+  let world = get_world(world_index)
+  if world.is_nil: return C_D3(x: 0'f64, y: 0'f64, z: 0'f64)
   result = world.global_pos handle
 
 proc c_get_global_cuboid_rot(world_index: cint, handle: PackedHandle): C_QF {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
-  let world = worlds[world_index]
-  if not world.valid: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
+  let world = get_world(world_index)
+  if world.is_nil: return C_QF(x: 0'f32, y: 0'f32, z: 0'f32, w: 1'f32)
   result = world.global_rot handle
 
 proc c_get_global_cuboid_dimensions(world_index: cint, handle: PackedHandle): C_F3 {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
-  let world = worlds[world_index]
-  if not world.valid: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
+  let world = get_world(world_index)
+  if world.is_nil: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
   result = world.global_dimensions handle
 
 proc c_num_aabb_tree_nodes(world_index: cint): cint {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return -1
-  let world = worlds[world_index]
-  if not world.valid: return -1
+  let world = get_world(world_index)
+  if world.is_nil: return -1
   result = world.num_aabb_tree_nodes().cint
 
 proc c_get_aabb_tree_node(world_index: cint, node_index: cint): C_FBB {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return invalid_fbb()
-  let world = worlds[world_index]
-  if not world.valid: return invalid_fbb()
+  let world = get_world(world_index)
+  if world.is_nil: return invalid_fbb()
   if node_index < 0: return invalid_fbb()
 
   let bb = world.get_aabb_tree_node(node_index.int)
@@ -240,9 +241,8 @@ proc c_get_aabb_tree_node(world_index: cint, node_index: cint): C_FBB {.cdecl, e
   result.max_z = bb.max.z
 
 proc c_get_a2a_collision_result(world_index: cint, collision_index: cint): C_CollisionManifold {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return invalid_collision_manifold()
-  let world = worlds[world_index]
-  if not world.valid: return invalid_collision_manifold()
+  let world = get_world(world_index)
+  if world.is_nil: return invalid_collision_manifold()
   if collision_index < 0: return invalid_collision_manifold()
   if collision_index.int >= world.a2a_narrowphase_manifold_count():
     return invalid_collision_manifold()
@@ -250,9 +250,8 @@ proc c_get_a2a_collision_result(world_index: cint, collision_index: cint): C_Col
   result = world.get_a2a_narrowphase_manifold(collision_index.int).to_c()
 
 proc c_get_a2s_collision_result(world_index: cint, collision_index: cint): C_A2sCollisionManifold {.cdecl, exportc, dynlib.} =
-  if world_index >= worlds.len: return invalid_a2s_collision_manifold()
-  let world = worlds[world_index]
-  if not world.valid: return invalid_a2s_collision_manifold()
+  let world = get_world(world_index)
+  if world.is_nil: return invalid_a2s_collision_manifold()
   if collision_index < 0: return invalid_a2s_collision_manifold()
   if collision_index.int >= world.a2s_narrowphase_manifold_count():
     return invalid_a2s_collision_manifold()
@@ -272,41 +271,29 @@ proc c_add_chunk_mesh_to_world*(
   world_index, chunk_x, chunk_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
 ): bool {.cdecl, exportc, dynlib.} =
-  if world_index < 0 or world_index >= worlds.len:
-    return false
-  if chunk_binary_data.isNil:
-    return false
-
-  let world = worlds[world_index]
-  if not world.valid:
+  let world = get_world(world_index)
+  if world.is_nil:
     return false
 
-  let chunk_binary_data_copy = cast[ptr ChunkBinaryData](alloc(sizeof(ChunkBinaryData)))
-  copyMem(chunk_binary_data_copy, chunk_binary_data, sizeof(ChunkBinaryData))
-  defer:
-    dealloc(chunk_binary_data_copy)
-
-  let origin_x = chunk_x * chunk_width.cint
-  let origin_z = chunk_z * chunk_width.cint
-  let chunk_mesh = build_chunk_mesh(origin_x, chunk_mesh_min_y.cint, origin_z, chunk_binary_data_copy)
-
-  world.command_queue.add Command(
-    kind: ck_add_mesh,
-    chunk_x: chunk_x.int32,
-    chunk_z: chunk_z.int32,
-    chunk_mesh: chunk_mesh,
-  )
-
-  result = true
+  result = world.add_chunk_mesh(chunk_position(chunk_x.int32, chunk_z.int32), chunk_binary_data)
 
 proc c_num_bbs(chunk_mesh_index: cint): cint {.cdecl, exportc, dynlib.} =
-  if chunk_mesh_index >= chunk_meshes.len:
+  if chunk_mesh_index < 0 or chunk_mesh_index >= chunk_meshes.len:
     return -1
-  result = chunk_meshes[chunk_mesh_index].bbs.len.cint
+  let mesh = chunk_meshes[chunk_mesh_index.int]
+  if mesh.is_nil:
+    return -1
+  result = mesh.bb_count.cint
 
 proc c_get_bb(chunk_mesh_index: cint, bb_index: cint): C_FBB {.cdecl, exportc, dynlib.} =
-  let bb = chunk_meshes[chunk_mesh_index].bbs[bb_index]
-  let origin: F3 = chunk_meshes[chunk_mesh_index].origin
+  if chunk_mesh_index < 0 or chunk_mesh_index >= chunk_meshes.len:
+    return invalid_fbb()
+  let mesh = chunk_meshes[chunk_mesh_index.int]
+  if mesh.is_nil or bb_index < 0 or bb_index >= mesh.bb_count:
+    return invalid_fbb()
+
+  let bb = mesh.bbs[bb_index.int]
+  let origin: F3 = mesh.origin
   result.min_x = origin.x + bb.min.x
   result.min_y = origin.y + bb.min.y
   result.min_z = origin.z + bb.min.z
