@@ -81,22 +81,6 @@ proc init_world*(Δt: float32, acceleration: F3): World =
   result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
   result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
 
-proc add_chunk_mesh*(world: World, chunk_pos: ChunkPosition, chunk_binary_data: ptr ChunkBinaryData): bool =
-  if world.is_nil or not world.valid or chunk_binary_data.is_nil:
-    return false
-
-  let origin_x = (chunk_pos.x * chunk_width.int32).cint
-  let origin_z = (chunk_pos.z * chunk_width.int32).cint
-  let chunk_mesh = build_chunk_mesh(origin_x, chunk_mesh_min_y.cint, origin_z, chunk_binary_data)
-
-  world.command_queue.add Command(
-    kind: ck_add_mesh,
-    chunk_x: chunk_pos.x,
-    chunk_z: chunk_pos.z,
-    chunk_mesh: chunk_mesh,
-  )
-  result = true
-
 proc tick_world*(world_index: int) =
   let start = get_mono_time()
 
@@ -151,7 +135,7 @@ proc tick_world*(world_index: int) =
             max: body_aabb.max - mesh_origin,
           )
 
-          for bb_idx in mesh.query(local_query):
+          for bb_idx in mesh.aabb_tree.query(local_query):
             let local_bb = mesh.bbs[bb_idx]
             let world_bb: FBB = (
               min: local_bb.min + mesh_origin,
@@ -223,9 +207,6 @@ proc deinit_world*(world: var World) =
 
   world.valid = false
   deinit_command_queue(world.command_queue)
-
-  for _, mesh in world.chunk_meshes_by_position:
-    deinit_chunk_mesh(mesh)
 
   if not world.narrowphase_pool.is_nil:
     deinit_narrowphase_pool(world.narrowphase_pool)

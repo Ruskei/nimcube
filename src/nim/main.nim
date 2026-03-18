@@ -12,5 +12,4 @@ proc library_init() {.cdecl, exportc, dynlib.} =
 proc library_deinit() {.cdecl, exportc, dynlib.} =
   echo "Nim deinit"
   deinit_worlds()
-  deinit_chunk_meshes()
   NimDestroyGlobals()

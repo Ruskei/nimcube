@@ -25,7 +25,7 @@ type
       handle*: BodyHandle
     of ck_add_mesh:
       chunk_x*, chunk_z*: int32
-      chunk_mesh*: ChunkMesh
+      chunk_binary_data*: ptr ChunkBinaryData
   Node = ptr NodeObject
   NodeObject = object
     next: Node
@@ -41,7 +41,7 @@ proc deinit_command_queue*(queue: var CommandQueue) =
   while node != nil:
     let next = node.next
     if node.command.kind == ck_add_mesh:
-      deinit_chunk_mesh(node.command.chunk_mesh)
+      deallocShared(node.command.chunk_binary_data)
     deallocShared(node)
     node = next
 
@@ -84,9 +84,8 @@ proc process_command_queue*(
       discard data.remove_cuboid(aabb_tree, command.handle)
     of ck_add_mesh:
       let pos = chunk_position(command.chunk_x, command.chunk_z)
-      if chunk_meshes_by_position.hasKey(pos):
-        deinit_chunk_mesh(chunk_meshes_by_position[pos])
-      chunk_meshes_by_position[pos] = command.chunk_mesh
+      chunk_meshes_by_position[pos] = build_chunk_mesh(command.chunk_x * chunk_width, chunk_mesh_min_y, command.chunk_z * chunk_width, command.chunk_binary_data)
+      deallocShared command.chunk_binary_data
 
     deallocShared(node)
     node = next

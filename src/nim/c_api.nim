@@ -275,7 +275,15 @@ proc c_add_chunk_mesh_to_world*(
   if world.is_nil:
     return false
 
-  result = world.add_chunk_mesh(chunk_position(chunk_x.int32, chunk_z.int32), chunk_binary_data)
+  let chunk_data_copy = cast[ptr ChunkBinaryData](allocShared0(sizeof(ChunkBinaryData)))
+  copyMem(chunk_data_copy, chunk_binary_data, sizeof(ChunkBinaryData))
+
+  world.command_queue.add Command(
+    kind: ck_add_mesh,
+    chunk_x: chunk_x.int32,
+    chunk_z: chunk_z.int32,
+    chunk_binary_data: chunk_data_copy,
+  )
 
 proc c_num_bbs(chunk_mesh_index: cint): cint {.cdecl, exportc, dynlib.} =
   if chunk_mesh_index < 0 or chunk_mesh_index >= chunk_meshes.len:
@@ -283,13 +291,13 @@ proc c_num_bbs(chunk_mesh_index: cint): cint {.cdecl, exportc, dynlib.} =
   let mesh = chunk_meshes[chunk_mesh_index.int]
   if mesh.is_nil:
     return -1
-  result = mesh.bb_count.cint
+  result = mesh.bbs.len.cint
 
 proc c_get_bb(chunk_mesh_index: cint, bb_index: cint): C_FBB {.cdecl, exportc, dynlib.} =
   if chunk_mesh_index < 0 or chunk_mesh_index >= chunk_meshes.len:
     return invalid_fbb()
   let mesh = chunk_meshes[chunk_mesh_index.int]
-  if mesh.is_nil or bb_index < 0 or bb_index >= mesh.bb_count:
+  if mesh.is_nil or bb_index < 0 or bb_index >= mesh.bbs.len:
     return invalid_fbb()
 
   let bb = mesh.bbs[bb_index.int]
