@@ -18,9 +18,17 @@ class Nim(plugin: Nimcube) {
     val tickWorldHandle: MethodHandle
 
     val createCuboidHandle: MethodHandle
+    val createPortalHandle: MethodHandle
+    val getPortalHandle: MethodHandle
+    val getPortalHandleByIndexHandle: MethodHandle
+    val removePortalHandle: MethodHandle
     val removeCuboidHandle: MethodHandle
 
     data class BodyHandle(val slot: Int, val generation: Int) {
+        val asLong = (slot.toLong()) or (generation.toLong() shl 32)
+    }
+
+    data class PortalHandle(val slot: Int, val generation: Int) {
         val asLong = (slot.toLong()) or (generation.toLong() shl 32)
     }
 
@@ -45,6 +53,25 @@ class Nim(plugin: Nimcube) {
             arena.close()
             handle = h
             return handle
+        }
+    }
+
+    class PotentialPortalHandle(
+        private val arena: Arena,
+        private val segment: MemorySegment,
+    ) {
+        private var handle: PortalHandle? = null
+
+        fun tryGet(): PortalHandle? {
+            handle?.let { return it }
+            val slot = segment.getAtIndex(ValueLayout.JAVA_INT, 0)
+            val generation = segment.getAtIndex(ValueLayout.JAVA_INT, 1)
+            if (slot == -1) return null
+
+            val resolved = PortalHandle(slot, generation)
+            arena.close()
+            handle = resolved
+            return resolved
         }
     }
 
@@ -91,6 +118,24 @@ class Nim(plugin: Nimcube) {
         ValueLayout.JAVA_INT.withName("handleGeneration"),
         MemoryLayout.paddingLayout(4),
     )
+    val C_PortalData = MemoryLayout.structLayout(
+        ValueLayout.JAVA_FLOAT.withName("originAX"),
+        ValueLayout.JAVA_FLOAT.withName("originAY"),
+        ValueLayout.JAVA_FLOAT.withName("originAZ"),
+        ValueLayout.JAVA_FLOAT.withName("originBX"),
+        ValueLayout.JAVA_FLOAT.withName("originBY"),
+        ValueLayout.JAVA_FLOAT.withName("originBZ"),
+        ValueLayout.JAVA_FLOAT.withName("quatAX"),
+        ValueLayout.JAVA_FLOAT.withName("quatAY"),
+        ValueLayout.JAVA_FLOAT.withName("quatAZ"),
+        ValueLayout.JAVA_FLOAT.withName("quatAW"),
+        ValueLayout.JAVA_FLOAT.withName("quatBX"),
+        ValueLayout.JAVA_FLOAT.withName("quatBY"),
+        ValueLayout.JAVA_FLOAT.withName("quatBZ"),
+        ValueLayout.JAVA_FLOAT.withName("quatBW"),
+        ValueLayout.JAVA_FLOAT.withName("scaleX"),
+        ValueLayout.JAVA_FLOAT.withName("scaleY"),
+    )
 
     val greedyMeshHandle: MethodHandle
     val addChunkMeshToWorldHandle: MethodHandle
@@ -116,6 +161,28 @@ class Nim(plugin: Nimcube) {
             dimensions.x == -1f &&
             dimensions.y == -1f &&
             dimensions.z == -1f
+    }
+
+    data class PortalData(
+        val originA: Vector3f,
+        val originB: Vector3f,
+        val quatA: Quaternionf,
+        val quatB: Quaternionf,
+        val scaleX: Float,
+        val scaleY: Float,
+    ) {
+        companion object {
+            val INVALID = PortalData(
+                originA = Vector3f(),
+                originB = Vector3f(),
+                quatA = Quaternionf(0f, 0f, 0f, 0f),
+                quatB = Quaternionf(0f, 0f, 0f, 0f),
+                scaleX = -1f,
+                scaleY = -1f,
+            )
+        }
+
+        fun isSentinel(): Boolean = this == INVALID
     }
 
     data class FBB(
@@ -247,6 +314,40 @@ class Nim(plugin: Nimcube) {
                 ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                 ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
                 ValueLayout.JAVA_FLOAT,
+            )
+        )
+        createPortalHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_create_portal"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_BOOLEAN,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+                ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
+            )
+        )
+        getPortalHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_portal"),
+            FunctionDescriptor.of(
+                C_PortalData,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+            )
+        )
+        getPortalHandleByIndexHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_portal_handle"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+            )
+        )
+        removePortalHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_remove_portal"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_BOOLEAN,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
             )
         )
         removeCuboidHandle = linker.downcallHandle(
@@ -398,8 +499,42 @@ class Nim(plugin: Nimcube) {
         return potentialBodyHandle
     }
 
+    fun createPortal(
+        worldIndex: WorldIndex,
+        originA: Vector3f,
+        originB: Vector3f,
+        quatA: Quaternionf,
+        quatB: Quaternionf,
+        scaleX: Float,
+        scaleY: Float,
+    ): PotentialPortalHandle? {
+        val arena = Arena.ofShared()
+        val packedHandle = arena.allocate(ValueLayout.JAVA_INT, 2)
+        packedHandle.setAtIndex(ValueLayout.JAVA_INT, 0, -1)
+        val potentialPortalHandle = PotentialPortalHandle(arena, packedHandle)
+        val success = createPortalHandle.invokeExact(
+            packedHandle,
+            worldIndex.index,
+            originA.x, originA.y, originA.z,
+            originB.x, originB.y, originB.z,
+            quatA.x, quatA.y, quatA.z, quatA.w,
+            quatB.x, quatB.y, quatB.z, quatB.w,
+            scaleX, scaleY,
+        ) as Boolean
+
+        if (!success) {
+            arena.close()
+            return null
+        }
+
+        return potentialPortalHandle
+    }
+
     fun removeCuboid(worldIndex: WorldIndex, handle: BodyHandle) =
         removeCuboidHandle.invokeExact(worldIndex.index, handle.asLong) as Boolean
+
+    fun removePortal(worldIndex: WorldIndex, handle: PortalHandle) =
+        removePortalHandle.invokeExact(worldIndex.index, handle.asLong) as Boolean
 
     fun isCuboidValid(worldIndex: WorldIndex, handle: BodyHandle) =
         isCuboidValidHandle.invokeExact(worldIndex.index, handle.asLong) as Boolean
@@ -436,6 +571,50 @@ class Nim(plugin: Nimcube) {
                 segment.get(ValueLayout.JAVA_FLOAT, 48),
             ),
         )
+    }
+
+    fun getPortal(tempArena: Arena, worldIndex: WorldIndex, handle: PortalHandle): PortalData {
+        val packedHandle = (handle.slot.toLong()) or (handle.generation.toLong() shl 32)
+        val segment =
+            getPortalHandle.invoke(
+                tempArena as SegmentAllocator,
+                worldIndex.index,
+                packedHandle,
+            ) as MemorySegment
+        return PortalData(
+            originA = Vector3f(
+                segment.get(ValueLayout.JAVA_FLOAT, 0),
+                segment.get(ValueLayout.JAVA_FLOAT, 4),
+                segment.get(ValueLayout.JAVA_FLOAT, 8),
+            ),
+            originB = Vector3f(
+                segment.get(ValueLayout.JAVA_FLOAT, 12),
+                segment.get(ValueLayout.JAVA_FLOAT, 16),
+                segment.get(ValueLayout.JAVA_FLOAT, 20),
+            ),
+            quatA = Quaternionf(
+                segment.get(ValueLayout.JAVA_FLOAT, 24),
+                segment.get(ValueLayout.JAVA_FLOAT, 28),
+                segment.get(ValueLayout.JAVA_FLOAT, 32),
+                segment.get(ValueLayout.JAVA_FLOAT, 36),
+            ),
+            quatB = Quaternionf(
+                segment.get(ValueLayout.JAVA_FLOAT, 40),
+                segment.get(ValueLayout.JAVA_FLOAT, 44),
+                segment.get(ValueLayout.JAVA_FLOAT, 48),
+                segment.get(ValueLayout.JAVA_FLOAT, 52),
+            ),
+            scaleX = segment.get(ValueLayout.JAVA_FLOAT, 56),
+            scaleY = segment.get(ValueLayout.JAVA_FLOAT, 60),
+        )
+    }
+
+    fun getPortalHandle(worldIndex: WorldIndex, portalIndex: Int): PortalHandle? {
+        val packed = getPortalHandleByIndexHandle.invokeExact(worldIndex.index, portalIndex) as Long
+        val slot = packed.toInt()
+        val generation = (packed ushr 32).toInt()
+        if (slot == -1) return null
+        return PortalHandle(slot, generation)
     }
 
     fun numAabbTreeNodes(worldIndex: WorldIndex): Int =

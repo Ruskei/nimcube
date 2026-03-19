@@ -11,6 +11,7 @@ import dynamic_aabb_tree
 import meshing
 import narrowphase
 import rw_lock
+import portal
 
 export chunk_positions
 
@@ -32,6 +33,10 @@ type
     a2s_warm_start: TableRef[A2sWarmStartKey, A2sWarmStartEntry]
     a2a_contact_manifolds: seq[A2aCollisionManifold]
     a2s_contact_manifolds: seq[A2sCollisionManifold]
+
+    portals: Portals
+    portal_aabb_tree: DynamicAabbTree[PortalsHandle]
+    external_portal_data*: ExternalPortalData
   World* = ptr WorldObj
 
 const max_worlds* = 1024
@@ -80,6 +85,8 @@ proc init_world*(Δt: float32, acceleration: F3): World =
   result.narrowphase_pool = init_narrowphase_pool()
   result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
   result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
+  result.portals = Portals()
+  result.portal_aabb_tree = init_dynamic_aabb_tree[PortalsHandle](fat_margin = 0.3'f32)
 
 proc tick_world*(world_index: int) =
   let start = get_mono_time()
@@ -90,7 +97,13 @@ proc tick_world*(world_index: int) =
 
   let data = world.internal_data
 
-  world.command_queue.process_command_queue(data, world.aabb_tree, world.chunk_meshes_by_position)
+  world.command_queue.process_command_queue(
+    data,
+    world.aabb_tree,
+    world.portals,
+    world.portal_aabb_tree,
+    world.chunk_meshes_by_position,
+  )
   world.narrowphase_pool.set_body_inputs(
     data.slot_count(),
     data.local_pos.len,
@@ -191,6 +204,7 @@ proc tick_world*(world_index: int) =
   let integrating = get_mono_time()
 
   data.update_external_data(world.external_data)
+  world.portals.update_external_data(world.external_portal_data)
 
   let finish = get_mono_time()
 

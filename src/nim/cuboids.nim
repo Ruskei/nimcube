@@ -7,6 +7,8 @@ import physics_math
 import rw_lock
 import packed_handle
 import dynamic_aabb_tree
+import portal
+import array_util
 
 type
   InternalData* = ref object
@@ -49,27 +51,6 @@ type
 
 const slot_invalid = -1
 
-proc grown_capacity(current_capacity, required_capacity: int): int =
-  result =
-    if current_capacity == 0:
-      1
-    else:
-      current_capacity * 2
-  if result < required_capacity:
-    result = required_capacity
-
-proc resize_shared_array[T](
-  data: var ptr UncheckedArray[T],
-  old_capacity: int,
-  new_capacity: int,
-) =
-  let old_size = Natural(old_capacity * sizeof(T))
-  let new_size = Natural(new_capacity * sizeof(T))
-  if data == nil:
-    data = cast[ptr UncheckedArray[T]](allocShared0(new_size))
-  else:
-    data = cast[ptr UncheckedArray[T]](reallocShared0(data, old_size, new_size))
-
 proc init_external_data*(data: var ExternalData) =
   data.pos = nil
   data.rot = nil
@@ -108,6 +89,39 @@ proc deinit_external_data*(data: var ExternalData) =
   data.slot_capacity = 0
   deinit_rw_lock(data.lock)
 
+proc update_external_data*(internal_data: InternalData, external_data: var ExternalData) =
+  with_write_lock(external_data.lock):
+    let body_count = internal_data.local_pos.len
+    let slot_count = internal_data.slot_to_dense.len
+
+    if external_data.body_capacity < body_count:
+      let new_body_capacity = grown_capacity(external_data.body_capacity, body_count)
+      resize_shared_array(external_data.pos, external_data.body_capacity, new_body_capacity)
+      resize_shared_array(external_data.rot, external_data.body_capacity, new_body_capacity)
+      resize_shared_array(external_data.dimensions, external_data.body_capacity, new_body_capacity)
+      resize_shared_array(external_data.dense_to_slot, external_data.body_capacity, new_body_capacity)
+      external_data.body_capacity = new_body_capacity
+
+    if external_data.slot_capacity < slot_count:
+      let new_slot_capacity = grown_capacity(external_data.slot_capacity, slot_count)
+      resize_shared_array(external_data.slot_to_dense, external_data.slot_capacity, new_slot_capacity)
+      resize_shared_array(external_data.generation, external_data.slot_capacity, new_slot_capacity)
+      external_data.slot_capacity = new_slot_capacity
+
+    external_data.body_count = body_count
+    external_data.slot_count = slot_count
+
+    for i in 0 ..< body_count:
+      let local_pos: D3 = internal_data.local_pos[i]
+      external_data.pos[i] = internal_data.initial_pos[i] + local_pos
+      external_data.rot[i] = internal_data.rot[i]
+      external_data.dimensions[i] = internal_data.dimensions[i]
+      external_data.dense_to_slot[i] = internal_data.dense_to_slot[i]
+
+    for i in 0 ..< slot_count:
+      external_data.slot_to_dense[i] = internal_data.slot_to_dense[i]
+      external_data.generation[i] = internal_data.generation[i]
+
 converter from_packed*(handle: PackedHandle): BodyHandle =
   result.slot = handle.slot
   result.generation = handle.generation.uint
@@ -129,14 +143,8 @@ proc is_valid_no_lock*(data: ExternalData, handle: BodyHandle): bool =
     data.slot_to_dense[handle.slot] != slot_invalid
 
 proc is_valid*(data: var ExternalData, handle: BodyHandle): bool =
-  var is_valid = false
   with_read_lock(data.lock):
-    is_valid =
-      handle.slot >= 0 and
-      handle.slot < data.slot_count and
-      data.generation[handle.slot] == handle.generation and
-      data.slot_to_dense[handle.slot] != slot_invalid
-  result = is_valid
+    return is_valid_no_lock(data, handle)
 
 proc dense_idx_no_lock*(data: ExternalData, handle: BodyHandle): int =
   if not data.is_valid_no_lock(handle):
@@ -360,36 +368,3 @@ proc update_cuboid_aabb*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHand
   if node_idx == invalid_node_index:
     return
   discard aabb_tree.update(node_idx, data.cached_aabb[dense_idx], displacement)
-
-proc update_external_data*(internal_data: InternalData, external_data: var ExternalData) =
-  with_write_lock(external_data.lock):
-    let body_count = internal_data.local_pos.len
-    let slot_count = internal_data.slot_to_dense.len
-
-    if external_data.body_capacity < body_count:
-      let new_body_capacity = grown_capacity(external_data.body_capacity, body_count)
-      resize_shared_array(external_data.pos, external_data.body_capacity, new_body_capacity)
-      resize_shared_array(external_data.rot, external_data.body_capacity, new_body_capacity)
-      resize_shared_array(external_data.dimensions, external_data.body_capacity, new_body_capacity)
-      resize_shared_array(external_data.dense_to_slot, external_data.body_capacity, new_body_capacity)
-      external_data.body_capacity = new_body_capacity
-
-    if external_data.slot_capacity < slot_count:
-      let new_slot_capacity = grown_capacity(external_data.slot_capacity, slot_count)
-      resize_shared_array(external_data.slot_to_dense, external_data.slot_capacity, new_slot_capacity)
-      resize_shared_array(external_data.generation, external_data.slot_capacity, new_slot_capacity)
-      external_data.slot_capacity = new_slot_capacity
-
-    external_data.body_count = body_count
-    external_data.slot_count = slot_count
-
-    for i in 0 ..< body_count:
-      let local_pos: D3 = internal_data.local_pos[i]
-      external_data.pos[i] = internal_data.initial_pos[i] + local_pos
-      external_data.rot[i] = internal_data.rot[i]
-      external_data.dimensions[i] = internal_data.dimensions[i]
-      external_data.dense_to_slot[i] = internal_data.dense_to_slot[i]
-
-    for i in 0 ..< slot_count:
-      external_data.slot_to_dense[i] = internal_data.slot_to_dense[i]
-      external_data.generation[i] = internal_data.generation[i]

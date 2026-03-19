@@ -27,7 +27,9 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     var physicsFrozen = false
 
     val potentialBodyHandles = ConcurrentLinkedDeque<Nim.PotentialBodyHandle>()
+    val potentialPortalHandles = ConcurrentLinkedDeque<Nim.PotentialPortalHandle>()
     val cuboids = mutableListOf<Cuboid>()
+    val portals = mutableListOf<Portal>()
 
     fun init() {
         physicsThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { physicsTick() }, 1, 1)
@@ -139,34 +141,57 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     }
 
     fun bukkitTick() {
-        var handle: Nim.PotentialBodyHandle? = null
-        val toRetry = mutableListOf<Nim.PotentialBodyHandle>()
-        while (potentialBodyHandles.poll().also { handle = it } != null) {
-            val h = handle
-            if (h == null) break
-            val bodyHandle = h.tryGet()
-            if (bodyHandle == null) toRetry += h
-            else cuboids += Cuboid(this, bodyHandle).also { it.init() }
-        }
-        potentialBodyHandles += toRetry
-
-        var i = cuboids.size - 1
-        while (i >= 0) {
-            val cuboid = cuboids[i]
-            if (!nim.isCuboidValid(worldIndex, cuboid.handle)) {
-                cuboid.deinit()
-                cuboids.removeAt(i)
-            }
-            i--
-        }
-
         Arena.ofConfined().use { arena ->
+            var bodyHandle: Nim.PotentialBodyHandle? = null
+            val bodiesToRetry = mutableListOf<Nim.PotentialBodyHandle>()
+            while (potentialBodyHandles.poll().also { bodyHandle = it } != null) {
+                val h = bodyHandle
+                if (h == null) break
+                val resolved = h.tryGet()
+                if (resolved == null) bodiesToRetry += h
+                else cuboids += Cuboid(this, resolved).also { it.init(arena) }
+            }
+            potentialBodyHandles += bodiesToRetry
+
+            var portalHandle: Nim.PotentialPortalHandle? = null
+            val portalsToRetry = mutableListOf<Nim.PotentialPortalHandle>()
+            while (potentialPortalHandles.poll().also { portalHandle = it } != null) {
+                val h = portalHandle
+                if (h == null) break
+                val resolved = h.tryGet()
+                if (resolved == null) portalsToRetry += h
+                else portals += Portal(this, resolved).also { it.init(arena) }
+            }
+            potentialPortalHandles += portalsToRetry
+
+            var i = cuboids.size - 1
+            while (i >= 0) {
+                val cuboid = cuboids[i]
+                if (!nim.isCuboidValid(worldIndex, cuboid.handle)) {
+                    cuboid.deinit()
+                    cuboids.removeAt(i)
+                }
+                i--
+            }
+
+            i = portals.size - 1
+            while (i >= 0) {
+                val portal = portals[i]
+                if (nim.getPortal(arena, worldIndex, portal.handle).isSentinel()) {
+                    portal.deinit()
+                    portals.removeAt(i)
+                }
+                i--
+            }
+
             cuboids.forEach { it.update(arena) }
+            portals.forEach { it.update(arena) }
         }
     }
 
     fun deinit() {
         cuboids.forEach { it.deinit() }
+        portals.forEach { it.deinit() }
         physicsThread?.cancel()
         bukkitThread?.cancel()
     }

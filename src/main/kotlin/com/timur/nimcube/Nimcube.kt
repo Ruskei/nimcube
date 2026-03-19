@@ -16,8 +16,10 @@ class Nimcube : JavaPlugin() {
     override fun onEnable() {
         GreedyMeshTestCommand(this).init()
         CuboidCommand(this).init()
+        PortalCommand(this).init()
         GridCuboidsCommand(this).init()
         ClearCommand(this).init()
+        ClearPortalsCommand(this).init()
         FreezeCommand(this).init()
         StepCommand(this).init()
     }
