@@ -54,7 +54,7 @@ class GridCuboidsCommand(private val plugin: Nimcube) : CommandExecutor {
                     Quaternionf(),
                     Vector3f(1f),
                     0.5f,
-                )
+                ) ?: continue
 
                 nimWorld.potentialBodyHandles += potentialBodyHandle
             }

@@ -31,7 +31,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
 
     fun init() {
         physicsThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { physicsTick() }, 1, 1)
-//        bukkitThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { bukkitTick() }, 1, 1)
+        bukkitThread = Bukkit.getScheduler().runTaskTimer(plugin, Runnable { bukkitTick() }, 1, 1)
     }
 
     fun physicsTick() {

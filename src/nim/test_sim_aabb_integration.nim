@@ -71,6 +71,20 @@ proc enqueue_add(
     packed_handle: packed_handle,
   )
 
+proc add_chunk_mesh(world: World, chunk_pos: ChunkPosition, chunk_binary_data: ptr ChunkBinaryData): bool =
+  if world.is_nil:
+    return false
+
+  let chunk_data_copy = cast[ptr ChunkBinaryData](allocShared0(sizeof(ChunkBinaryData)))
+  copyMem(chunk_data_copy, chunk_binary_data, sizeof(ChunkBinaryData))
+  world.command_queue.add Command(
+    kind: ck_add_mesh,
+    chunk_x: chunk_pos.x,
+    chunk_z: chunk_pos.z,
+    chunk_binary_data: chunk_data_copy,
+  )
+  true
+
 proc test_world_initialization() =
   let world = fresh_world()
   doAssert world.internal_data.local_pos.len == 0
@@ -90,7 +104,7 @@ proc test_add_chunk_mesh_inserts_into_world_table() =
 
   let mesh = world.chunk_meshes_by_position[chunk_pos]
   doAssert mesh.origin == (0'i32, chunk_mesh_min_y.int32, 0'i32)
-  doAssert mesh.bb_count > 0
+  doAssert mesh.bbs.len > 0
 
 proc test_add_chunk_mesh_replaces_existing_position() =
   let world = fresh_world()
@@ -101,14 +115,14 @@ proc test_add_chunk_mesh_replaces_existing_position() =
   doAssert world.add_chunk_mesh(chunk_pos, addr first_chunk_binary_data)
   tick_world(0)
   let first_mesh = world.chunk_meshes_by_position[chunk_pos]
-  doAssert first_mesh.bb_count == 1
+  doAssert first_mesh.bbs.len == 1
 
   doAssert world.add_chunk_mesh(chunk_pos, addr second_chunk_binary_data)
   tick_world(0)
   doAssert world.chunk_meshes_by_position.len == 1
 
   let second_mesh = world.chunk_meshes_by_position[chunk_pos]
-  doAssert second_mesh.bb_count == 2
+  doAssert second_mesh.bbs.len == 2
 
 proc test_add_chunk_mesh_stores_multiple_positions() =
   let world = fresh_world()
@@ -353,6 +367,32 @@ proc test_tick_world_environment_broadphase_uses_chunk_local_tree_and_world_spac
     doAssert contact.position.z >= static_bb.min.z - 1.0001'f32
     doAssert contact.position.z <= static_bb.max.z + 1.0001'f32
 
+proc test_tick_world_environment_broadphase_uses_chunk_mesh_payload_indices() =
+  let world = fresh_world()
+  let chunk_pos = chunk_position(0, 0)
+  var chunk_binary_data = make_chunk_binary_data(@[(1, 0, 1), (3, 0, 1), (5, 0, 1)])
+  var packed = PackedHandle(slot: -1, generation: 0)
+
+  doAssert world.add_chunk_mesh(chunk_pos, addr chunk_binary_data)
+  let static_bb = voxel_world_bb(chunk_pos, 5, 0, 1)
+  world.enqueue_add(
+    packed_handle = addr packed,
+    pos = bb_center(static_bb),
+    vel = (0'f32, 0'f32, 0'f32),
+    ω = (0'f32, 0'f32, 0'f32),
+    dimensions = (1'f32, 1'f32, 1'f32),
+  )
+
+  tick_world(0)
+
+  doAssert world.a2s_narrowphase_manifold_count() >= 1
+  let manifold = world.get_a2s_narrowphase_manifold(0)
+  doAssert manifold.contact_count > 0
+  for idx in 0 ..< manifold.contact_count.int:
+    let contact = manifold.contact_points[idx]
+    doAssert contact.position.x >= static_bb.min.x - 1.0001'f32
+    doAssert contact.position.x <= static_bb.max.x + 1.0001'f32
+
 proc test_tick_world_no_a2s_when_no_chunk_mesh_overlaps() =
   let world = fresh_world()
   let chunk_pos = chunk_position(5, 5)
@@ -500,6 +540,7 @@ when is_main_module:
   test_narrowphase_dispatch_smoke()
   test_tick_world_generates_a2s_contacts_from_chunk_mesh()
   test_tick_world_environment_broadphase_uses_chunk_local_tree_and_world_space_hit()
+  test_tick_world_environment_broadphase_uses_chunk_mesh_payload_indices()
   test_tick_world_no_a2s_when_no_chunk_mesh_overlaps()
   test_tick_world_negative_chunk_coordinates_for_a2s()
   test_chunk_mesh_contact_solves_velocity()

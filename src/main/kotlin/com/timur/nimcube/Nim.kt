@@ -209,7 +209,7 @@ class Nim(plugin: Nimcube) {
     )
 
     init {
-        val libPath = plugin.dataFolder.toPath().resolve("libmain.so").toAbsolutePath()
+        val libPath = plugin.dataFolder.toPath().resolve("libmain.dylib").toAbsolutePath()
         val lookup = SymbolLookup.libraryLookup(libPath, libArena)
         val linker = Linker.nativeLinker()
 

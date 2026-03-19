@@ -135,7 +135,8 @@ proc tick_world*(world_index: int) =
             max: body_aabb.max - mesh_origin,
           )
 
-          for bb_idx in mesh.aabb_tree.query(local_query):
+          for bb_leaf_idx in mesh.aabb_tree.query(local_query):
+            let bb_idx = mesh.aabb_tree.data(bb_leaf_idx)
             let local_bb = mesh.bbs[bb_idx]
             let world_bb: FBB = (
               min: local_bb.min + mesh_origin,
@@ -177,9 +178,7 @@ proc tick_world*(world_index: int) =
 
   let constraint_solving = get_mono_time()
 
-  # echo "integrating"
   for i in 0 ..< data.local_pos.len:
-    # echo "  vel=", data.vel[i]
     let displacement = data.vel[i] * Δt
     data.local_pos[i] += displacement
     let ω = data.ω[i]

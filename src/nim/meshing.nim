@@ -119,6 +119,8 @@ proc build_chunk_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,
 ): ChunkMesh =
+  new result
+
   let start = get_mono_time()
 
   result.aabb_tree = init_dynamic_aabb_tree[int](fat_margin = 0'f32)

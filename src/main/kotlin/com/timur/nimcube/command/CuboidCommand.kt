@@ -168,7 +168,7 @@ class CuboidCommand(val plugin: Nimcube) : CommandExecutor {
             rotation,
             options.dimensions,
             options.inverseMass,
-        )
+        ) ?: return true
 
         nimWorld.potentialBodyHandles += potentialBodyHandle
 
