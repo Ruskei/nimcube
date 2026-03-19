@@ -34,8 +34,8 @@ class Portal(
         val portal = nim.getPortal(arena, worldIndex, handle)
         displayA?.remove()
         displayB?.remove()
-        displayA = spawnDisplay(portal.originA, Material.RED_CONCRETE)
-        displayB = spawnDisplay(portal.originB, Material.BLUE_CONCRETE)
+        displayA = spawnDisplay(portal.originA, Material.NETHER_PORTAL)
+        displayB = spawnDisplay(portal.originB, Material.NETHER_PORTAL)
         applyPortalData(portal)
     }
 
