@@ -6,12 +6,15 @@ import narrowphase
 import cuboids
 import packed_handle
 import physics_math
+import portal
 import sim
 
 type
   PoolFixture = object
     data: InternalData
     tree: DynamicAabbTree[BodyHandle]
+    portal_tree: DynamicAabbTree[SpecificPortalsHandle]
+    portals: Portals
     pool: NarrowphasePool
 
 proc make_handle(idx: int): BodyHandle =
@@ -44,6 +47,10 @@ proc make_bb(
 proc quat_z(angle_deg: float32): QF =
   let half_angle = angle_deg * PI.float32 / 360'f32
   normalized((0'f32, 0'f32, sin(half_angle), cos(half_angle)))
+
+proc quat_y(angle_deg: float32): QF =
+  let half_angle = angle_deg * PI.float32 / 360'f32
+  normalized((0'f32, sin(half_angle), 0'f32, cos(half_angle)))
 
 proc make_a2s_hit(
   idx: int,
@@ -86,6 +93,8 @@ proc enqueue_add(
 proc init_pool_fixture(): PoolFixture =
   result.data = InternalData()
   result.tree = init_dynamic_aabb_tree[BodyHandle]()
+  result.portal_tree = init_dynamic_aabb_tree[SpecificPortalsHandle](fat_margin = 0'f32)
+  result.portals = Portals()
   result.pool = init_narrowphase_pool()
 
 proc deinit(fixture: var PoolFixture) =
@@ -101,6 +110,16 @@ proc sync_body_inputs(fixture: PoolFixture) =
     fixture.data.cached_center_ptr(),
     fixture.data.cached_half_extents_ptr(),
     fixture.data.cached_world_axes_ptr(),
+  )
+
+proc current_body_inputs(fixture: PoolFixture): NarrowphaseBodyInputs =
+  NarrowphaseBodyInputs(
+    slot_count: fixture.data.slot_count(),
+    body_count: fixture.data.local_pos.len,
+    slot_to_dense: fixture.data.slot_to_dense_ptr(),
+    centers: fixture.data.cached_center_ptr(),
+    half_extents: fixture.data.cached_half_extents_ptr(),
+    world_axes: fixture.data.cached_world_axes_ptr(),
   )
 
 proc add_body(
@@ -120,6 +139,26 @@ proc add_body(
     rot = rot,
     dimensions = dimensions,
     inverse_mass = inverse_mass,
+  )
+
+proc add_portal(
+  fixture: var PoolFixture,
+  origin_a, origin_b: F3,
+  quat_a: QF = quat_identity(float32),
+  quat_b: QF = quat_identity(float32),
+  scale_x = 2'f32,
+  scale_y = 2'f32,
+): PortalsHandle =
+  fixture.portals.add_portal(
+    fixture.portal_tree,
+    Portal(
+      origin_a: origin_a,
+      origin_b: origin_b,
+      quat_a: quat_a,
+      quat_b: quat_b,
+      scale_x: scale_x,
+      scale_y: scale_y,
+    ),
   )
 
 proc collect_results(pool: NarrowphasePool): seq[NarrowphaseResult] =
@@ -519,6 +558,131 @@ proc test_face_manifold_is_order_invariant() =
       ),
     )
 
+proc test_cuboid_collides_with_portal_overlap_a() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
+proc test_cuboid_collides_with_portal_separated() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 2'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert not cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
+proc test_cuboid_collides_with_portal_which_selects_face() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (5'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert not cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+  doAssert cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_b),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
+proc test_cuboid_collides_with_rotated_portal() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+    quat_a = quat_y(90'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
+proc test_cuboid_collides_with_portal_invalid_body() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert not cuboid_collides_with_portal(
+    BodyHandle(slot: -1, generation: 0'u),
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
+proc test_cuboid_collides_with_portal_invalid_portal() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 0'f64),
+    dimensions = (2'f32, 2'f32, 2'f32),
+  )
+  fixture.sync_body_inputs()
+
+  doAssert not cuboid_collides_with_portal(
+    handle,
+    SpecificPortalsHandle(handle: PortalsHandle(slot: -1, generation: 0), which: wp_a),
+    fixture.current_body_inputs(),
+    fixture.portals,
+  )
+
 when is_main_module:
   test_pool_init()
   test_a2a_broadphase_raw_buffer_growth()
@@ -535,5 +699,11 @@ when is_main_module:
   test_a2a_face_manifold_is_canonical_when_body_b_is_reference()
   test_face_manifold_generation()
   test_face_manifold_is_order_invariant()
+  test_cuboid_collides_with_portal_overlap_a()
+  test_cuboid_collides_with_portal_separated()
+  test_cuboid_collides_with_portal_which_selects_face()
+  test_cuboid_collides_with_rotated_portal()
+  test_cuboid_collides_with_portal_invalid_body()
+  test_cuboid_collides_with_portal_invalid_portal()
   deinit_worlds()
   echo "narrowphase tests passed"

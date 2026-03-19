@@ -5,6 +5,7 @@ import std/typedthreads
 
 import cuboids
 import physics_math
+import portal
 
 const
   max_clipped_vertices = 8
@@ -139,6 +140,8 @@ type
     p1: F3
     sign_mask: uint8
 
+proc find_separating_axis(a, b: BodyObbView, hit: var SatAxisHit): bool
+
 proc other_axes(axis_idx: int): array[2, int] =
   case axis_idx
   of 0:
@@ -193,6 +196,55 @@ proc load_static_body_obb(static_bb: FBB, body: var BodyObbView): bool =
     axis_is_usable(body.axes[0]) and
     axis_is_usable(body.axes[1]) and
     axis_is_usable(body.axes[2])
+
+proc load_portal_body_obb(portals: Portals, handle: SpecificPortalsHandle, body: var BodyObbView): bool =
+  if not portals.is_valid(handle.handle):
+    return false
+
+  let portal = portals.portal(handle.handle)
+  let center =
+    case handle.which
+    of wp_a:
+      portal.origin_a
+    of wp_b:
+      portal.origin_b
+  let rotation =
+    case handle.which
+    of wp_a:
+      normalized(portal.quat_a)
+    of wp_b:
+      normalized(portal.quat_b)
+  let portal_normal = normalized(rotate_vector(rotation, (0'f32, 0'f32, 1'f32)))
+
+  body.center = center
+  body.half_extents = (portal.scale_x * 0.5'f32, portal.scale_y * 0.5'f32, 0'f32)
+  body.axes = [
+    normalized(rotate_vector(rotation, (1'f32, 0'f32, 0'f32))),
+    normalized(rotate_vector(rotation, (0'f32, 1'f32, 0'f32))),
+    portal_normal,
+  ]
+  result =
+    body.center.is_finite and
+    body.half_extents.is_finite and
+    axis_is_usable(body.axes[0]) and
+    axis_is_usable(body.axes[1]) and
+    axis_is_usable(body.axes[2])
+
+proc cuboid_collides_with_portal*(
+  body: BodyHandle,
+  portal: SpecificPortalsHandle,
+  narrowphase_pool: NarrowphasePool,
+  portals: Portals,
+): bool =
+  var body_obb: BodyObbView
+  var portal_obb: BodyObbView
+  if not load_body_obb(narrowphase_pool.body_inputs, body, body_obb):
+    return false
+  if not load_portal_body_obb(portals, portal, portal_obb):
+    return false
+
+  var hit: SatAxisHit
+  find_separating_axis(body_obb, portal_obb, hit)
 
 proc ensure_shared_capacity[T](
   data: var ptr UncheckedArray[T],

@@ -70,7 +70,7 @@ proc process_command_queue*(
   data: InternalData,
   aabb_tree: DynamicAabbTree[BodyHandle],
   portals: Portals,
-  portal_aabb_tree: DynamicAabbTree[PortalsHandle],
+  portal_aabb_tree: DynamicAabbTree[SpecificPortalsHandle],
   chunk_meshes_by_position: var Table[ChunkPosition, ChunkMesh],
 ) =
   var node = queue.head.exchange nil

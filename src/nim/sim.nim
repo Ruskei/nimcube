@@ -35,7 +35,7 @@ type
     a2s_contact_manifolds: seq[A2sCollisionManifold]
 
     portals: Portals
-    portal_aabb_tree: DynamicAabbTree[PortalsHandle]
+    portal_aabb_tree: DynamicAabbTree[SpecificPortalsHandle]
     external_portal_data*: ExternalPortalData
   World* = ptr WorldObj
 
@@ -86,7 +86,7 @@ proc init_world*(Δt: float32, acceleration: F3): World =
   result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
   result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
   result.portals = Portals()
-  result.portal_aabb_tree = init_dynamic_aabb_tree[PortalsHandle](fat_margin = 0.3'f32)
+  result.portal_aabb_tree = init_dynamic_aabb_tree[SpecificPortalsHandle](fat_margin = 0'f32)
 
 proc tick_world*(world_index: int) =
   let start = get_mono_time()
@@ -156,6 +156,16 @@ proc tick_world*(world_index: int) =
               max: local_bb.max + mesh_origin,
             )
             world.narrowphase_pool.add_a2s_broadphase_result((body: handle, static_bb: world_bb))
+
+  for dense_idx in 0 ..< data.local_pos.len:
+    let handle = data.body_handle_at_dense(dense_idx)
+    let body_aabb = data.aabb(handle)
+
+    for portal_leaf_idx in world.portal_aabb_tree.query(body_aabb):
+      let portal_handle = world.portal_aabb_tree.data portal_leaf_idx
+      let portal = world.portals.portal(portal_handle.handle)
+      let collides = cuboid_collides_with_portal(handle, portal_handle, world.narrowphase_pool, world.portals)
+      if collides: echo "collides!"
 
   let broadphase = get_mono_time()
 

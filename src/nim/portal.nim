@@ -7,6 +7,8 @@ import packed_handle
 
 type
   ## The "base" portal is a 1x1 portal on the x-y plane with a normal in the +z direction
+  WhichPortal* = enum
+    wp_a, wp_b
   Portal* = object
     origin_a*: F3
     origin_b*: F3
@@ -42,6 +44,9 @@ type
     slot_capacity*: int
 
     lock*: RwLock
+  SpecificPortalsHandle* = object
+    handle*: PortalsHandle
+    which*: WhichPortal
 
 proc init_external_portal_data*(data: var ExternalPortalData) =
   data.portal = nil
@@ -165,7 +170,7 @@ proc aabb*(portal: Portal): tuple[a: FBB, b: FBB] =
 
 proc add_portal*(
   portals: Portals,
-  portal_aabb_tree: DynamicAabbTree[PortalsHandle],
+  portal_aabb_tree: DynamicAabbTree[SpecificPortalsHandle],
   portal: Portal,
 ): PortalsHandle =
   result = portals.add(
@@ -182,6 +187,6 @@ proc add_portal*(
 
   let dense = portals.slot_to_dense[result.slot]
   let (bb_a, bb_b) = portals.portal(result).aabb()
-  let bb_index_a = portal_aabb_tree.insert(bb_a, result)
-  let bb_index_b = portal_aabb_tree.insert(bb_b, result)
+  let bb_index_a = portal_aabb_tree.insert(bb_a, SpecificPortalsHandle(handle: result, which: wp_a))
+  let bb_index_b = portal_aabb_tree.insert(bb_b, SpecificPortalsHandle(handle: result, which: wp_b))
   portals.aabb_index[dense] = (bb_index_a, bb_index_b)
