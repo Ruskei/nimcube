@@ -9,27 +9,24 @@ import packed_handle
 import dynamic_aabb_tree
 import portal
 import array_util
+import stable_soa
+
+declare_stable_soa_type InternalData:
+  initial_pos: D3
+  local_pos: F3
+  vel: F3
+  ω: F3
+  rot: QF
+  dimensions: F3
+  inverse_mass: float32
+  cached_center: F3
+  cached_half_extents: F3
+  cached_world_axes: array[3, F3]
+  cached_inverse_inertia_diag: F3
+  cached_aabb: FBB
+  aabb_node_idx: NodeIndex
 
 type
-  InternalData* = ref object
-    initial_pos*: seq[D3]
-    local_pos*: seq[F3]
-    vel*: seq[F3]
-    ω*: seq[F3]
-    rot*: seq[QF]
-    dimensions*: seq[F3]
-    inverse_mass*: seq[float32]
-    cached_center: seq[F3]
-    cached_half_extents: seq[F3]
-    cached_world_axes: seq[array[3, F3]]
-    cached_inverse_inertia_diag: seq[F3]
-    cached_aabb: seq[FBB]
-
-    dense_to_slot: seq[int]
-    slot_to_dense: seq[int]
-    generation: seq[uint]
-    free_slots: seq[int]
-    aabb_node_idx: seq[NodeIndex]
   ExternalData* = object
     pos*: ptr UncheckedArray[D3]
     rot*: ptr UncheckedArray[QF]
@@ -48,6 +45,12 @@ type
   BodyHandle* = object
     slot*: int
     generation*: uint
+
+converter internal_to_body*(handle: InternalDataHandle): BodyHandle =
+  BodyHandle(slot: handle.slot, generation: handle.generation.uint)
+
+converter body_to_internal*(handle: BodyHandle): InternalDataHandle =
+  InternalDataHandle(slot: handle.slot, generation: handle.generation.int)
 
 const slot_invalid = -1
 
@@ -120,18 +123,11 @@ proc update_external_data*(internal_data: InternalData, external_data: var Exter
 
     for i in 0 ..< slot_count:
       external_data.slot_to_dense[i] = internal_data.slot_to_dense[i]
-      external_data.generation[i] = internal_data.generation[i]
+      external_data.generation[i] = internal_data.generation[i].uint
 
 converter from_packed*(handle: PackedHandle): BodyHandle =
   result.slot = handle.slot
   result.generation = handle.generation.uint
-
-proc is_valid*(data: InternalData, handle: BodyHandle): bool =
-  return
-    handle.slot >= 0 and
-    handle.slot < data.generation.len and
-    data.generation[handle.slot] == handle.generation and
-    data.slot_to_dense[handle.slot] != slot_invalid
 
 proc is_valid_no_lock*(data: ExternalData, handle: BodyHandle): bool =
   return
@@ -213,101 +209,42 @@ proc create_cuboid*(
   dimensions: F3,
   inverse_mass: float32,
 ): BodyHandle =
-  var slot: int
-  if data.free_slots.len > 0:
-    slot = data.free_slots.pop()
-  else:
-    slot = data.generation.len
-    data.generation.add 0
-    data.slot_to_dense.add slot_invalid
+  result = data.add(
+    initial_pos = initial_pos,
+    local_pos = default(F3),
+    vel = vel,
+    ω = ω,
+    rot = normalized(rot),
+    dimensions = dimensions,
+    inverse_mass = inverse_mass,
+    cached_center = default(F3),
+    cached_half_extents = default(F3),
+    cached_world_axes = default(array[3, F3]),
+    cached_inverse_inertia_diag = inverse_inertia(dimensions, inverse_mass),
+    cached_aabb = default(FBB),
+    aabb_node_idx = invalid_node_index
+  )
 
-  let dense = data.local_pos.len
-  data.initial_pos.add initial_pos
-  data.local_pos.add (0'f32, 0'f32, 0'f32)
-  data.vel.add vel
-  data.ω.add ω
-  data.rot.add normalized(rot)
-  data.dimensions.add dimensions
-  data.inverse_mass.add inverse_mass
-  data.cached_center.add default(F3)
-  data.cached_half_extents.add default(F3)
-  data.cached_world_axes.add default(array[3, F3])
-  data.cached_inverse_inertia_diag.add inverse_inertia(dimensions, inverse_mass)
-  data.cached_aabb.add default(FBB)
-  data.dense_to_slot.add slot
-  data.aabb_node_idx.add invalid_node_index
-  data.slot_to_dense[slot] = dense
-
-  result = BodyHandle(slot: slot, generation: data.generation[slot])
-  data.update_body_collision_cache(dense)
+  let dense = data.slot_to_dense[result.slot]
+  data.update_body_collision_cache dense
   data.aabb_node_idx[dense] = aabb_tree.insert(data.cached_aabb[dense], result)
 
 proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], handle: BodyHandle): bool =
   if not data.is_valid(handle):
     return false
 
-  let slot = handle.slot
-  let dense = data.slot_to_dense[slot]
-  let last_dense = data.local_pos.len - 1
-  let node_idx = data.aabb_node_idx[dense]
-
+  let node_idx = data.aabb_node_idx handle
   if node_idx != invalid_node_index:
     discard aabb_tree.remove(node_idx)
 
-  if dense != last_dense:
-    let moved_slot = data.dense_to_slot[last_dense]
-    data.initial_pos[dense] = data.initial_pos[last_dense]
-    data.local_pos[dense] = data.local_pos[last_dense]
-    data.vel[dense] = data.vel[last_dense]
-    data.ω[dense] = data.ω[last_dense]
-    data.rot[dense] = data.rot[last_dense]
-    data.dimensions[dense] = data.dimensions[last_dense]
-    data.inverse_mass[dense] = data.inverse_mass[last_dense]
-    data.cached_center[dense] = data.cached_center[last_dense]
-    data.cached_half_extents[dense] = data.cached_half_extents[last_dense]
-    data.cached_world_axes[dense] = data.cached_world_axes[last_dense]
-    data.cached_inverse_inertia_diag[dense] = data.cached_inverse_inertia_diag[last_dense]
-    data.cached_aabb[dense] = data.cached_aabb[last_dense]
-    data.aabb_node_idx[dense] = data.aabb_node_idx[last_dense]
-    data.dense_to_slot[dense] = moved_slot
-    data.slot_to_dense[moved_slot] = dense
-
-  data.initial_pos.setLen last_dense
-  data.local_pos.setLen last_dense
-  data.vel.setLen last_dense
-  data.ω.setLen last_dense
-  data.rot.setLen last_dense
-  data.dimensions.setLen last_dense
-  data.inverse_mass.setLen last_dense
-  data.cached_center.setLen last_dense
-  data.cached_half_extents.setLen last_dense
-  data.cached_world_axes.setLen last_dense
-  data.cached_inverse_inertia_diag.setLen last_dense
-  data.cached_aabb.setLen last_dense
-  data.dense_to_slot.setLen last_dense
-  data.aabb_node_idx.setLen last_dense
-
-  data.slot_to_dense[slot] = slot_invalid
-  inc data.generation[slot]
-  data.free_slots.add slot
-
-  result = true
-
-proc local_pos*(data: InternalData, handle: BodyHandle): F3 =
-  result = data.local_pos[data.slot_to_dense[handle.slot]]
-
-proc rot*(data: InternalData, handle: BodyHandle): QF =
-  result = data.rot[data.slot_to_dense[handle.slot]]
-
-proc dimensions*(data: InternalData, handle: BodyHandle): F3 =
-  result = data.dimensions[data.slot_to_dense[handle.slot]]
+  result = data.remove handle
 
 proc aabb*(data: InternalData, handle: BodyHandle): FBB =
-  result = data.cached_aabb[data.slot_to_dense[handle.slot]]
+  data.cached_aabb handle
 
 proc body_handle_at_dense*(data: InternalData, dense_idx: int): BodyHandle =
   let slot = data.dense_to_slot[dense_idx]
-  BodyHandle(slot: slot, generation: data.generation[slot])
+  BodyHandle(slot: slot, generation: data.generation[slot].uint)
 
 proc slot_count*(data: InternalData): int =
   data.slot_to_dense.len
