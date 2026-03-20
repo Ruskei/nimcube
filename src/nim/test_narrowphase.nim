@@ -302,10 +302,13 @@ proc test_a2s_face_manifold_generation() =
 
   for idx in 0 ..< results[0].a2s.contact_count.int:
     let contact = results[0].a2s.contact_points[idx]
+    let static_surface_point = contact.position - contact.normal * contact.penetration_depth
     doAssert contact.penetration_depth > 0'f32
+    doAssert approx_equal(contact.position.x, 1'f32)
     doAssert approx_equal(abs(contact.normal.x), 1'f32)
     doAssert approx_equal(contact.normal.y, 0'f32)
     doAssert approx_equal(contact.normal.z, 0'f32)
+    doAssert approx_equal(static_surface_point.x, 0.5'f32)
 
 proc test_a2s_manifold_carries_static_hash() =
   var fixture = init_pool_fixture()
@@ -351,13 +354,151 @@ proc test_a2s_face_manifold_is_canonical_when_static_is_reference() =
 
   for idx in 0 ..< results[0].a2s.contact_count.int:
     let contact = results[0].a2s.contact_points[idx]
-    let dynamic_surface_point = contact.position + contact.normal * contact.penetration_depth
-    doAssert approx_equal(contact.position.x, 0.5'f32)
+    let static_surface_point = contact.position - contact.normal * contact.penetration_depth
+    doAssert contact.position.x > 0.5'f32
+    doAssert contact.position.x <= 1.5'f32
     doAssert approx_equal(contact.normal.x, 1'f32)
     doAssert approx_equal(contact.normal.y, 0'f32)
     doAssert approx_equal(contact.normal.z, 0'f32)
-    doAssert dynamic_surface_point.x > contact.position.x
-    doAssert dynamic_surface_point.x <= 1.0001'f32
+    doAssert static_surface_point.x <= contact.position.x
+
+proc test_a2s_portal_border_manifold_corner_contact() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (1.35'f64, 1.35'f64, 0'f64),
+    dimensions = (0.2'f32, 0.2'f32, 0.2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  let manifold = generate_a2s_cuboid_portal_border_manifold(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.6'f32,
+  )
+
+  doAssert same_handle(manifold.body_a, handle)
+  doAssert manifold.contact_count == 1
+
+  let contact = manifold.contact_points[0]
+  doAssert approx_vec_equal(contact.position, (1.25'f32, 1.25'f32, 0'f32))
+  doAssert approx_equal(contact.normal.x, sqrt(0.5'f32))
+  doAssert approx_equal(contact.normal.y, sqrt(0.5'f32))
+  doAssert approx_equal(contact.normal.z, 0'f32)
+  doAssert contact.penetration_depth > 0'f32
+
+proc test_a2s_portal_border_manifold_edge_contact() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 1.35'f64, 0'f64),
+    dimensions = (0.2'f32, 0.2'f32, 0.2'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  let manifold = generate_a2s_cuboid_portal_border_manifold(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.6'f32,
+  )
+
+  doAssert same_handle(manifold.body_a, handle)
+  doAssert manifold.contact_count == 1
+
+  let contact = manifold.contact_points[0]
+  doAssert approx_equal(abs(contact.position.x), 0.1'f32)
+  doAssert approx_equal(contact.position.y, 1.25'f32)
+  doAssert approx_equal(contact.position.z, 0'f32)
+  doAssert approx_equal(abs(contact.normal.x), 0'f32)
+  doAssert approx_equal(contact.normal.y, 1'f32)
+  doAssert approx_equal(contact.normal.z, 0'f32)
+  doAssert contact.penetration_depth > 0'f32
+
+proc test_a2s_portal_border_manifold_ignores_face_interior() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let handle = fixture.add_body(
+    pos = (0'f64, 0'f64, 0'f64),
+    dimensions = (0.5'f32, 0.5'f32, 0.5'f32),
+  )
+  let portal_handle = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  let manifold = generate_a2s_cuboid_portal_border_manifold(
+    handle,
+    SpecificPortalsHandle(handle: portal_handle, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.1'f32,
+  )
+
+  doAssert same_handle(manifold.body_a, handle)
+  doAssert manifold.contact_count == 0
+
+proc test_a2s_portal_border_manifold_hash_depends_on_handles() =
+  var fixture = init_pool_fixture()
+  defer: fixture.deinit()
+
+  let body_a = fixture.add_body(
+    pos = (1.35'f64, 1.35'f64, 0'f64),
+    dimensions = (0.2'f32, 0.2'f32, 0.2'f32),
+  )
+  let body_b = fixture.add_body(
+    pos = (1.35'f64, 1.35'f64, 0'f64),
+    dimensions = (0.2'f32, 0.2'f32, 0.2'f32),
+  )
+  let portal_a = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  let portal_b = fixture.add_portal(
+    origin_a = (0'f32, 0'f32, 0'f32),
+    origin_b = (5'f32, 0'f32, 0'f32),
+  )
+  fixture.sync_body_inputs()
+
+  let manifold_a = generate_a2s_cuboid_portal_border_manifold(
+    body_a,
+    SpecificPortalsHandle(handle: portal_a, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.6'f32,
+  )
+  let manifold_b = generate_a2s_cuboid_portal_border_manifold(
+    body_a,
+    SpecificPortalsHandle(handle: portal_b, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.6'f32,
+  )
+  let manifold_c = generate_a2s_cuboid_portal_border_manifold(
+    body_b,
+    SpecificPortalsHandle(handle: portal_a, which: wp_a),
+    fixture.pool,
+    fixture.portals,
+    0.6'f32,
+  )
+
+  doAssert manifold_a.static_hash != manifold_b.static_hash
+  doAssert manifold_a.static_hash != manifold_c.static_hash
 
 proc test_mixed_a2a_and_a2s_outputs() =
   var fixture = init_pool_fixture()
@@ -575,7 +716,7 @@ proc test_cuboid_collides_with_portal_overlap_a() =
   doAssert cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: portal_handle, which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -596,7 +737,7 @@ proc test_cuboid_collides_with_portal_separated() =
   doAssert not cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: portal_handle, which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -617,13 +758,13 @@ proc test_cuboid_collides_with_portal_which_selects_face() =
   doAssert not cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: portal_handle, which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
   doAssert cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: portal_handle, which: wp_b),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -645,7 +786,7 @@ proc test_cuboid_collides_with_rotated_portal() =
   doAssert cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: portal_handle, which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -662,7 +803,7 @@ proc test_cuboid_collides_with_portal_invalid_body() =
   doAssert not cuboid_collides_with_portal(
     BodyHandle(slot: -1, generation: 0'u),
     SpecificPortalsHandle(handle: portal_handle, which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -679,7 +820,7 @@ proc test_cuboid_collides_with_portal_invalid_portal() =
   doAssert not cuboid_collides_with_portal(
     handle,
     SpecificPortalsHandle(handle: PortalsHandle(slot: -1, generation: 0), which: wp_a),
-    fixture.current_body_inputs(),
+    fixture.pool,
     fixture.portals,
   )
 
@@ -695,6 +836,10 @@ when is_main_module:
   test_a2s_face_manifold_generation()
   test_a2s_manifold_carries_static_hash()
   test_a2s_face_manifold_is_canonical_when_static_is_reference()
+  test_a2s_portal_border_manifold_corner_contact()
+  test_a2s_portal_border_manifold_edge_contact()
+  test_a2s_portal_border_manifold_ignores_face_interior()
+  test_a2s_portal_border_manifold_hash_depends_on_handles()
   test_mixed_a2a_and_a2s_outputs()
   test_a2a_face_manifold_is_canonical_when_body_b_is_reference()
   test_face_manifold_generation()

@@ -83,6 +83,7 @@ class Nim(plugin: Nimcube) {
     val getAabbTreeNodeHandle: MethodHandle
     val getA2aCollisionResultHandle: MethodHandle
     val getA2sCollisionResultHandle: MethodHandle
+    val getPortalBorderCollisionResultHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
     val getCuboidMeshDataHandle: MethodHandle
@@ -448,6 +449,13 @@ class Nim(plugin: Nimcube) {
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
             )
         )
+        getPortalBorderCollisionResultHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_portal_border_manifold"),
+            FunctionDescriptor.of(
+                C_A2sCollisionManifold,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
+            )
+        )
 
         greedyMeshHandle = linker.downcallHandle(
             lookup.findOrThrow("c_greedy_mesh"),
@@ -700,6 +708,47 @@ class Nim(plugin: Nimcube) {
             arena as SegmentAllocator,
             worldIndex.index,
             collisionIndex
+        ) as MemorySegment
+        val contactPoints = ArrayList<CollisionContactPoint>(4)
+        val contactPointBaseOffset = 12L
+        val contactPointStride = 28L
+
+        for (i in 0 until 4) {
+            val baseOffset = contactPointBaseOffset + i * contactPointStride
+            contactPoints += CollisionContactPoint(
+                position = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 0),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 4),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 8),
+                ),
+                normal = Vector3f(
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 12),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 16),
+                    segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 20),
+                ),
+                penetrationDepth = segment.get(ValueLayout.JAVA_FLOAT, baseOffset + 24),
+            )
+        }
+
+        return A2sCollisionResult(
+            contactCount = segment.get(ValueLayout.JAVA_INT, 0),
+            bodyA = BodyHandle(
+                segment.get(ValueLayout.JAVA_INT, 4),
+                segment.get(ValueLayout.JAVA_INT, 8),
+            ),
+            contactPoints = contactPoints,
+        )
+    }
+
+    fun getPortalBorderCollisionResult(
+        arena: Arena,
+        worldIndex: WorldIndex,
+        manifoldIndex: Int,
+    ): A2sCollisionResult {
+        val segment = getPortalBorderCollisionResultHandle.invokeExact(
+            arena as SegmentAllocator,
+            worldIndex.index,
+            manifoldIndex,
         ) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
         val contactPointBaseOffset = 12L

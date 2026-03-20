@@ -18,6 +18,8 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     private val a2aContactNormalDust = Particle.DustOptions(Color.AQUA, 0.4f)
     private val a2sContactPointDust = Particle.DustOptions(Color.BLACK, 0.4f)
     private val a2sContactNormalDust = Particle.DustOptions(Color.LIME, 0.4f)
+    private val portalBorderContactPointDust = Particle.DustOptions(Color.YELLOW, 0.4f)
+    private val portalBorderContactNormalDust = Particle.DustOptions(Color.ORANGE, 0.4f)
     private val physicsSubstepsPerTick = round(0.05 / dt).toInt()
 
     val nim = plugin.nim
@@ -44,8 +46,6 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         if (!physicsFrozen) {
             advancePhysicsSubsteps(physicsSubstepsPerTick)
         }
-
-//        renderPhysicsDebug()
         physicsBlocked.set(false)
     }
 
@@ -71,10 +71,10 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
 
     private fun renderPhysicsDebug() {
         Arena.ofConfined().use { arena ->
-            val nodeCount = nim.numAabbTreeNodes(worldIndex)
-            for (i in 0 until nodeCount) {
-                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
-            }
+//            val nodeCount = nim.numAabbTreeNodes(worldIndex)
+//            for (i in 0 until nodeCount) {
+//                nim.getAabbTreeNode(arena, worldIndex, i).showEdges(bukkitWorld, 0.99f)
+//            }
 
             var collisionIndex = 0
             while (true) {
@@ -98,6 +98,19 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
                     collision.contactPoints,
                     a2sContactPointDust,
                     a2sContactNormalDust
+                )
+                collisionIndex++
+            }
+
+            collisionIndex = 0
+            while (true) {
+                val collision = nim.getPortalBorderCollisionResult(arena, worldIndex, collisionIndex)
+                if (collision.isSentinel()) break
+                showCollisionContacts(
+                    collision.contactCount,
+                    collision.contactPoints,
+                    portalBorderContactPointDust,
+                    portalBorderContactNormalDust,
                 )
                 collisionIndex++
             }
@@ -190,6 +203,8 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
             cuboids.forEach { it.update(arena, cuboidMeshBuffer) }
             portals.forEach { it.update(arena) }
         }
+
+//        renderPhysicsDebug()
     }
 
     fun deinit() {

@@ -434,13 +434,13 @@ proc append_constraints_from_a2s_manifold(
     if contact.normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
+    # A2S manifolds store the body-side contact point on body A.
     let normal = -normalized(contact.normal)
     if normal.length_squared <= constraint_epsilon * constraint_epsilon:
       continue
 
     let penetration_depth = max(contact.penetration_depth, 0'f32)
-    let point_b = contact.position
-    let point_a = point_b - normal * penetration_depth
+    let point_a = contact.position
     let r_a = point_a - centers[dense_a]
 
     let penetration_error = max(penetration_depth - baumgarte_slop, 0'f32)
@@ -522,6 +522,7 @@ proc precompute_velocity_constraints*(
   dt: float32,
   a2a_warm_start: TableRef[A2aWarmStartKey, A2aWarmStartEntry],
   a2s_warm_start: TableRef[A2sWarmStartKey, A2sWarmStartEntry],
+  portal_border_manifolds: var seq[A2sCollisionManifold],
 ) =
   buffer.a2a_normals.count = 0
   buffer.a2s_normals.count = 0
@@ -538,12 +539,15 @@ proc precompute_velocity_constraints*(
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
     for manifold_idx in 0 ..< manifold_count:
-      let result = pool.worker_output_at(worker_idx, manifold_idx)
-      case result.kind
+      let res = pool.worker_output_at(worker_idx, manifold_idx)
+      case res.kind
       of nrk_a2a:
-        required_a2a_normal_capacity += result.a2a.contact_count.int
+        required_a2a_normal_capacity += res.a2a.contact_count.int
       of nrk_a2s:
-        required_a2s_normal_capacity += result.a2s.contact_count.int
+        required_a2s_normal_capacity += res.a2s.contact_count.int
+
+  for manifold in portal_border_manifolds:
+    required_a2s_normal_capacity += manifold.contact_count.int
 
   buffer.a2a_normals.constraints.ensure_constraint_capacity(required_a2a_normal_capacity)
   buffer.a2s_normals.constraints.ensure_constraint_capacity(required_a2s_normal_capacity)
@@ -553,13 +557,13 @@ proc precompute_velocity_constraints*(
   for worker_idx in 0 ..< pool.worker_count:
     let manifold_count = pool.worker_output_count(worker_idx)
     for manifold_idx in 0 ..< manifold_count:
-      let result = pool.worker_output_at(worker_idx, manifold_idx)
-      case result.kind
+      let res = pool.worker_output_at(worker_idx, manifold_idx)
+      case res.kind
       of nrk_a2a:
         buffer.a2a_normals.append_constraints_from_a2a_manifold(
           buffer.a2a_frictions,
           data,
-          result.a2a,
+          res.a2a,
           dt,
           slot_to_dense,
           centers,
@@ -569,12 +573,23 @@ proc precompute_velocity_constraints*(
         buffer.a2s_normals.append_constraints_from_a2s_manifold(
           buffer.a2s_frictions,
           data,
-          result.a2s,
+          res.a2s,
           dt,
           slot_to_dense,
           centers,
           a2s_warm_start,
         )
+
+  for manifold in portal_border_manifolds:
+    buffer.a2s_normals.append_constraints_from_a2s_manifold(
+      buffer.a2s_frictions,
+      data,
+      manifold,
+      dt,
+      slot_to_dense,
+      centers,
+      a2s_warm_start,
+    )
 
 proc relative_point_velocity(data: InternalData, dense_idx: int, r: F3): F3 =
   data.vel[dense_idx] + (data.ω[dense_idx] × r)

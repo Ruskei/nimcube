@@ -45,11 +45,11 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
         }
 
         val x = args[startIndex].toFloatOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid $flag x value: ${args[startIndex]}"))
+                ?: return Result.failure(IllegalArgumentException("Invalid $flag x value: ${args[startIndex]}"))
         val y = args[startIndex + 1].toFloatOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid $flag y value: ${args[startIndex + 1]}"))
+                ?: return Result.failure(IllegalArgumentException("Invalid $flag y value: ${args[startIndex + 1]}"))
         val z = args[startIndex + 2].toFloatOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid $flag z value: ${args[startIndex + 2]}"))
+                ?: return Result.failure(IllegalArgumentException("Invalid $flag z value: ${args[startIndex + 2]}"))
 
         return Result.success(Vector3f(x, y, z) to (startIndex + 3))
     }
@@ -64,9 +64,9 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
         }
 
         val x = args[startIndex].toFloatOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid $flag x value: ${args[startIndex]}"))
+                ?: return Result.failure(IllegalArgumentException("Invalid $flag x value: ${args[startIndex]}"))
         val y = args[startIndex + 1].toFloatOrNull()
-            ?: return Result.failure(IllegalArgumentException("Invalid $flag y value: ${args[startIndex + 1]}"))
+                ?: return Result.failure(IllegalArgumentException("Invalid $flag y value: ${args[startIndex + 1]}"))
 
         return Result.success((x to y) to (startIndex + 2))
     }
@@ -88,6 +88,7 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
                     originA = value
                     index = nextIndex
                 }
+
                 "--origin-b", "-ob" -> {
                     val (value, nextIndex) = parseVector3(args, index + 1, "--origin-b").getOrElse {
                         return Result.failure(it)
@@ -95,6 +96,7 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
                     originB = value
                     index = nextIndex
                 }
+
                 "--rotation-a", "-ra" -> {
                     val (value, nextIndex) = parseVector3(args, index + 1, "--rotation-a").getOrElse {
                         return Result.failure(it)
@@ -102,6 +104,7 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
                     rotationA = value
                     index = nextIndex
                 }
+
                 "--rotation-b", "-rb" -> {
                     val (value, nextIndex) = parseVector3(args, index + 1, "--rotation-b").getOrElse {
                         return Result.failure(it)
@@ -109,6 +112,7 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
                     rotationB = value
                     index = nextIndex
                 }
+
                 "--scale", "-s" -> {
                     val (value, nextIndex) = parseScale(args, index + 1, "--scale").getOrElse {
                         return Result.failure(it)
@@ -116,9 +120,11 @@ class PortalCommand(private val plugin: Nimcube) : CommandExecutor {
                     scale = value
                     index = nextIndex
                 }
+
                 "--help", "-h" -> {
                     return Result.failure(IllegalArgumentException("help"))
                 }
+
                 else -> {
                     return Result.failure(IllegalArgumentException("Unknown argument: ${args[index]}"))
                 }

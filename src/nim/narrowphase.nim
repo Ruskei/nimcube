@@ -1,5 +1,6 @@
 import std/hashes
 import std/locks
+import std/math
 import std/osproc
 import std/typedthreads
 
@@ -15,6 +16,20 @@ const
   face_bias_relative = 0.98'f32
   point_merge_epsilon = 1.0e-4'f32
   volume_epsilon = 1.0e-6'f32
+  obb_edge_pairs: array[12, tuple[a, b: int]] = [
+    (a: 0, b: 1),
+    (a: 2, b: 3),
+    (a: 4, b: 5),
+    (a: 6, b: 7),
+    (a: 0, b: 2),
+    (a: 1, b: 3),
+    (a: 4, b: 6),
+    (a: 5, b: 7),
+    (a: 0, b: 4),
+    (a: 1, b: 5),
+    (a: 2, b: 6),
+    (a: 3, b: 7),
+  ]
 
 type
   ContactPoint* = object
@@ -133,6 +148,12 @@ type
 
   ContactCandidate = object
     position: F3
+    penetration_depth: float32
+
+  PortalBorderContactCandidate = object
+    body_position: F3
+    portal_position: F3
+    normal: F3
     penetration_depth: float32
 
   SupportEdge = object
@@ -581,6 +602,307 @@ proc write_reduced_contacts(
       penetration_depth: candidates[selected[idx]].penetration_depth,
     )
 
+proc build_obb_vertices(body: BodyObbView, vertices: var array[8, F3]) =
+  for idx in 0 ..< vertices.len:
+    let sx = if (idx and 1) == 0: -1'f32 else: 1'f32
+    let sy = if (idx and 2) == 0: -1'f32 else: 1'f32
+    let sz = if (idx and 4) == 0: -1'f32 else: 1'f32
+    vertices[idx] =
+      body.center +
+      sx * body.half_extents.x * body.axes[0] +
+      sy * body.half_extents.y * body.axes[1] +
+      sz * body.half_extents.z * body.axes[2]
+
+proc build_portal_border_corners(portal: BodyObbView, corners: var array[4, F3]) =
+  let half_x = portal.half_extents.x * portal.axes[0]
+  let half_y = portal.half_extents.y * portal.axes[1]
+
+  corners[0] = portal.center - half_x - half_y
+  corners[1] = portal.center - half_x + half_y
+  corners[2] = portal.center + half_x - half_y
+  corners[3] = portal.center + half_x + half_y
+
+proc closest_point_on_obb(body: BodyObbView, point: F3, closest: var F3): bool =
+  if not point.is_finite:
+    return false
+  if not axis_is_usable(body.axes[0]) or not axis_is_usable(body.axes[1]) or not axis_is_usable(body.axes[2]):
+    return false
+
+  let delta = point - body.center
+  let local_x = clamp(delta ∙ body.axes[0], -body.half_extents.x, body.half_extents.x)
+  let local_y = clamp(delta ∙ body.axes[1], -body.half_extents.y, body.half_extents.y)
+  let local_z = clamp(delta ∙ body.axes[2], -body.half_extents.z, body.half_extents.z)
+
+  closest =
+    body.center +
+    local_x * body.axes[0] +
+    local_y * body.axes[1] +
+    local_z * body.axes[2]
+  result = closest.is_finite
+
+proc closest_point_on_segment_from_point(
+  p0, p1, point: F3,
+  closest: var F3,
+): bool =
+  let edge = p1 - p0
+  let edge_len = edge.length
+  if edge_len <= axis_epsilon:
+    return false
+
+  let edge_dir = edge / edge_len
+  let t = (point - p0) ∙ edge_dir
+  if t < 0'f32 or t > edge_len:
+    return false
+
+  closest = p0 + t * edge_dir
+  result = closest.is_finite
+
+proc closest_points_on_infinite_lines(
+  p0, p1, q0, q1: F3,
+  closest_p: var F3,
+  closest_q: var F3,
+): bool =
+  let p_edge = p1 - p0
+  let q_edge = q1 - q0
+  let p_len = p_edge.length
+  let q_len = q_edge.length
+  if p_len <= axis_epsilon or q_len <= axis_epsilon:
+    return false
+
+  let p_dir = p_edge / p_len
+  let q_dir = q_edge / q_len
+  let r = q0 - p0
+  let r_perp = r - p_dir * (r ∙ p_dir)
+  let q_perp = q_dir - p_dir * (q_dir ∙ p_dir)
+  let q_perp_len_sq = q_perp.length_squared
+  if q_perp_len_sq <= axis_epsilon * axis_epsilon:
+    return false
+
+  let s = -(r_perp ∙ q_perp) / q_perp_len_sq
+  let t = (r ∙ p_dir) + s * (q_dir ∙ p_dir)
+  if t < 0'f32 or t > p_len or s < 0'f32 or s > q_len:
+    return false
+
+  closest_p = p0 + t * p_dir
+  closest_q = q0 + s * q_dir
+  result = closest_p.is_finite and closest_q.is_finite
+
+proc portal_border_contact_normal(
+  body: BodyObbView,
+  portal: BodyObbView,
+  body_point, portal_point: F3,
+): F3 =
+  let delta = body_point - portal_point
+  if axis_is_usable(delta):
+    return normalized(delta)
+
+  let body_axis_delta = body_point - body.center
+  if axis_is_usable(body_axis_delta):
+    return normalized(body_axis_delta)
+
+  let center_delta = body.center - portal_point
+  if axis_is_usable(center_delta):
+    return normalized(center_delta)
+
+  portal.axes[2]
+
+proc make_portal_border_candidate(
+  body: BodyObbView,
+  portal: BodyObbView,
+  body_point, portal_point: F3,
+  radius: float32,
+  candidate: var PortalBorderContactCandidate,
+): bool =
+  let delta = body_point - portal_point
+  let distance_sq = delta.length_squared
+  if not distance_sq.is_finite:
+    return false
+
+  let radius_sq = radius * radius
+  if distance_sq > radius_sq:
+    return false
+
+  let distance = sqrt(distance_sq)
+  candidate = PortalBorderContactCandidate(
+    body_position: body_point,
+    portal_position: portal_point,
+    normal: -portal_border_contact_normal(body, portal, body_point, portal_point),
+    penetration_depth: radius - distance,
+  )
+  result = true
+
+proc unique_portal_border_candidates(
+  candidates: array[max_clipped_vertices, PortalBorderContactCandidate],
+  candidate_count: int,
+  unique_candidates: var array[max_clipped_vertices, PortalBorderContactCandidate],
+): int =
+  for idx in 0 ..< candidate_count:
+    var merged = false
+    for unique_idx in 0 ..< result:
+      let delta = candidates[idx].body_position - unique_candidates[unique_idx].body_position
+      if delta.length_squared <= point_merge_epsilon * point_merge_epsilon:
+        if candidates[idx].penetration_depth > unique_candidates[unique_idx].penetration_depth:
+          unique_candidates[unique_idx] = candidates[idx]
+        merged = true
+        break
+    if not merged:
+      unique_candidates[result] = candidates[idx]
+      inc result
+
+proc portal_border_point_score(candidate: PortalBorderContactCandidate): float32 =
+  candidate.penetration_depth
+
+proc select_portal_border_farthest_index(
+  candidates: array[max_clipped_vertices, PortalBorderContactCandidate],
+  candidate_count: int,
+  origin: F3,
+  selected: array[4, int],
+  selected_count: int,
+): int =
+  var best_score = -1'f32
+  result = -1
+  for idx in 0 ..< candidate_count:
+    if contains_index(selected, selected_count, idx):
+      continue
+    let score = (candidates[idx].portal_position - origin).length_squared
+    if score > best_score:
+      best_score = score
+      result = idx
+
+proc select_portal_border_triangle_index(
+  candidates: array[max_clipped_vertices, PortalBorderContactCandidate],
+  candidate_count: int,
+  idx0, idx1: int,
+  selected: array[4, int],
+  selected_count: int,
+): int =
+  var best_score = -1'f32
+  result = -1
+  let edge = candidates[idx1].portal_position - candidates[idx0].portal_position
+
+  for idx in 0 ..< candidate_count:
+    if contains_index(selected, selected_count, idx):
+      continue
+    let score = (edge × (candidates[idx].portal_position - candidates[idx0].portal_position)).length_squared
+    if score > best_score:
+      best_score = score
+      result = idx
+
+proc select_portal_border_volume_index(
+  candidates: array[max_clipped_vertices, PortalBorderContactCandidate],
+  candidate_count: int,
+  indices: array[4, int],
+  portal_normal: F3,
+): int =
+  let p0 = candidates[indices[0]].portal_position
+  let p1 = candidates[indices[1]].portal_position
+  let p2 = candidates[indices[2]].portal_position
+  let base_cross = (p1 - p0) × (p2 - p0)
+
+  var best_score = -1'f32
+  result = -1
+
+  for idx in 0 ..< candidate_count:
+    if contains_index(indices, 3, idx):
+      continue
+    let score = abs((candidates[idx].portal_position - p0) ∙ base_cross)
+    if score > best_score:
+      best_score = score
+      result = idx
+
+  if best_score <= volume_epsilon:
+    let basis = orthonormal_basis(portal_normal)
+    var fallback_score = -1'f32
+    result = -1
+    for idx in 0 ..< candidate_count:
+      if contains_index(indices, 3, idx):
+        continue
+      let candidates_to_score = [p0, p1, p2, candidates[idx].portal_position]
+      var min_u = Inf
+      var max_u = -Inf
+      var min_v = Inf
+      var max_v = -Inf
+      for point in candidates_to_score:
+        let relative = point - p0
+        let u = relative ∙ basis.u
+        let v = relative ∙ basis.v
+        if u < min_u: min_u = u
+        if u > max_u: max_u = u
+        if v < min_v: min_v = v
+        if v > max_v: max_v = v
+      let score = (max_u - min_u) * (max_v - min_v)
+      if score > fallback_score:
+        fallback_score = score
+        result = idx
+
+proc write_reduced_portal_border_contacts(
+  candidates: array[max_clipped_vertices, PortalBorderContactCandidate],
+  candidate_count: int,
+  portal_normal: F3,
+  contact_points: var array[4, ContactPoint],
+  contact_count: var uint8,
+) =
+  if candidate_count <= contact_points.len:
+    contact_count = candidate_count.uint8
+    for idx in 0 ..< candidate_count:
+      contact_points[idx] = ContactPoint(
+        position: candidates[idx].body_position,
+        normal: candidates[idx].normal,
+        penetration_depth: candidates[idx].penetration_depth,
+      )
+    return
+
+  var selected: array[4, int]
+  selected[0] = 0
+  for idx in 1 ..< candidate_count:
+    if portal_border_point_score(candidates[idx]) > portal_border_point_score(candidates[selected[0]]):
+      selected[0] = idx
+
+  selected[1] = select_portal_border_farthest_index(
+    candidates,
+    candidate_count,
+    candidates[selected[0]].portal_position,
+    selected,
+    1,
+  )
+  if selected[1] < 0:
+    selected[1] = (selected[0] + 1) mod candidate_count
+
+  selected[2] = select_portal_border_triangle_index(
+    candidates,
+    candidate_count,
+    selected[0],
+    selected[1],
+    selected,
+    2,
+  )
+  if selected[2] < 0:
+    selected[2] = select_portal_border_farthest_index(
+      candidates,
+      candidate_count,
+      candidates[selected[1]].portal_position,
+      selected,
+      2,
+    )
+
+  selected[3] = select_portal_border_volume_index(candidates, candidate_count, selected, portal_normal)
+  if selected[3] < 0:
+    selected[3] = select_portal_border_farthest_index(
+      candidates,
+      candidate_count,
+      candidates[selected[2]].portal_position,
+      selected,
+      3,
+    )
+
+  contact_count = 4
+  for idx in 0 ..< 4:
+    contact_points[idx] = ContactPoint(
+      position: candidates[selected[idx]].body_position,
+      normal: candidates[selected[idx]].normal,
+      penetration_depth: candidates[selected[idx]].penetration_depth,
+    )
+
 proc a2a_build_face_manifold(
   a, b: BodyObbView,
   hit: SatAxisHit,
@@ -729,7 +1051,7 @@ proc a2a_build_edge_manifold(
   closest_points_on_segments(edge_a.p0, edge_a.p1, edge_b.p0, edge_b.p1, point_a, point_b)
 
   let contact_delta = point_a - point_b
-  var contact_normal = -hit.normal
+  var contact_normal = hit.normal
   var contact_depth = hit.penetration
   if axis_is_usable(contact_delta):
     contact_normal = normalized(contact_delta)
@@ -842,9 +1164,10 @@ proc a2s_build_face_manifold(
   )
   if not reference_is_a:
     for idx in 0 ..< manifold.contact_count.int:
-      manifold.contact_points[idx].position +=
-        manifold.contact_points[idx].normal * manifold.contact_points[idx].penetration_depth
       manifold.contact_points[idx].normal = -manifold.contact_points[idx].normal
+  for idx in 0 ..< manifold.contact_count.int:
+    manifold.contact_points[idx].position +=
+      manifold.contact_points[idx].normal * manifold.contact_points[idx].penetration_depth
   result = manifold.contact_count > 0
 
 proc a2s_build_edge_manifold(
@@ -860,7 +1183,7 @@ proc a2s_build_edge_manifold(
   closest_points_on_segments(edge_a.p0, edge_a.p1, edge_b.p0, edge_b.p1, point_a, point_b)
 
   let contact_delta = point_a - point_b
-  var contact_normal = -hit.normal
+  var contact_normal = hit.normal
   var contact_depth = hit.penetration
   if axis_is_usable(contact_delta):
     contact_normal = normalized(contact_delta)
@@ -901,6 +1224,135 @@ proc generate_a2s_cuboid_manifold(
     a2s_build_edge_manifold(body_a, body_b, sat_hit, manifold)
   else:
     false
+
+proc portal_border_hash(body: BodyHandle, portal: SpecificPortalsHandle): Hash =
+  var h: Hash = 0
+  h = h !& hash(body.slot)
+  h = h !& hash(body.generation)
+  h = h !& hash(portal.handle.slot)
+  h = h !& hash(portal.handle.generation)
+  h = h !& hash(portal.which)
+  result = !$h
+
+proc generate_a2s_cuboid_portal_border_manifold*(
+  body: BodyHandle,
+  portal: SpecificPortalsHandle,
+  narrowphase_pool: NarrowphasePool,
+  portals: Portals,
+  radius: float32,
+): A2sCollisionManifold =
+  result = default(A2sCollisionManifold)
+
+  if narrowphase_pool.is_nil or not radius.is_finite or radius < 0'f32:
+    return
+
+  var body_obb: BodyObbView
+  var portal_obb: BodyObbView
+  if not load_body_obb(narrowphase_pool.body_inputs, body, body_obb):
+    return
+  if not load_portal_body_obb(portals, portal, portal_obb):
+    return
+  if portal_obb.half_extents.x <= 0'f32 or portal_obb.half_extents.y <= 0'f32:
+    return
+
+  result.body_a = body
+  result.static_hash = portal_border_hash(body, portal)
+
+  var body_vertices: array[8, F3]
+  build_obb_vertices(body_obb, body_vertices)
+
+  var portal_corners: array[4, F3]
+  build_portal_border_corners(portal_obb, portal_corners)
+
+  var candidates: array[max_clipped_vertices, PortalBorderContactCandidate]
+  var candidate_count = 0
+
+  for portal_corner in portal_corners:
+    var body_point: F3
+    if not closest_point_on_obb(body_obb, portal_corner, body_point):
+      continue
+
+    var candidate: PortalBorderContactCandidate
+    if make_portal_border_candidate(body_obb, portal_obb, body_point, portal_corner, radius, candidate):
+      candidates[candidate_count] = candidate
+      inc candidate_count
+
+  const portal_edge_pairs = [
+    (a: 0, b: 1),
+    (a: 2, b: 3),
+    (a: 0, b: 2),
+    (a: 1, b: 3),
+  ]
+
+  for edge_pair in portal_edge_pairs:
+    let portal_p0 = portal_corners[edge_pair.a]
+    let portal_p1 = portal_corners[edge_pair.b]
+
+    var best_candidate: PortalBorderContactCandidate
+    var best_distance_sq = Inf
+    var found_candidate = false
+
+    for vertex_idx in 0 ..< body_vertices.len:
+      var portal_point: F3
+      if not closest_point_on_segment_from_point(portal_p0, portal_p1, body_vertices[vertex_idx], portal_point):
+        continue
+
+      let delta_sq = (body_vertices[vertex_idx] - portal_point).length_squared
+      if not delta_sq.is_finite:
+        continue
+      if delta_sq > radius * radius:
+        continue
+
+      if not found_candidate or delta_sq < best_distance_sq:
+        var candidate: PortalBorderContactCandidate
+        if make_portal_border_candidate(body_obb, portal_obb, body_vertices[vertex_idx], portal_point, radius, candidate):
+          best_distance_sq = delta_sq
+          best_candidate = candidate
+          found_candidate = true
+
+    for edge_idx in 0 ..< obb_edge_pairs.len:
+      let body_edge = obb_edge_pairs[edge_idx]
+      var portal_point: F3
+      var body_point: F3
+      if not closest_points_on_infinite_lines(
+        portal_p0,
+        portal_p1,
+        body_vertices[body_edge.a],
+        body_vertices[body_edge.b],
+        portal_point,
+        body_point,
+      ):
+        continue
+
+      let delta_sq = (body_point - portal_point).length_squared
+      if not delta_sq.is_finite:
+        continue
+      if delta_sq > radius * radius:
+        continue
+
+      if not found_candidate or delta_sq < best_distance_sq:
+        var candidate: PortalBorderContactCandidate
+        if make_portal_border_candidate(body_obb, portal_obb, body_point, portal_point, radius, candidate):
+          best_distance_sq = delta_sq
+          best_candidate = candidate
+          found_candidate = true
+
+    if found_candidate:
+      candidates[candidate_count] = best_candidate
+      inc candidate_count
+
+  var unique_candidates: array[max_clipped_vertices, PortalBorderContactCandidate]
+  let unique_count = unique_portal_border_candidates(candidates, candidate_count, unique_candidates)
+  if unique_count == 0:
+    return
+
+  write_reduced_portal_border_contacts(
+    unique_candidates,
+    unique_count,
+    portal_obb.axes[2],
+    result.contact_points,
+    result.contact_count,
+  )
 
 proc reset_worker_state(state: var NarrowphaseWorkerState) =
   state.job = NarrowphaseJob(

@@ -39,8 +39,10 @@ type
     portals: Portals
     portal_aabb_tree: DynamicAabbTree[SpecificPortalsHandle]
     external_portal_data*: ExternalPortalData
+    portal_border_manifolds: seq[A2sCollisionManifold]
   World* = ptr WorldObj
 
+const portal_border_radius = 0.15
 const max_worlds* = 1024
 var worlds*: array[max_worlds, World]
 const chunk_range_epsilon = 1.0e-5'f32
@@ -88,7 +90,7 @@ proc init_world*(Δt: float32, acceleration: F3): World =
   result.a2a_warm_start = newTable[A2aWarmStartKey, A2aWarmStartEntry]()
   result.a2s_warm_start = newTable[A2sWarmStartKey, A2sWarmStartEntry]()
   result.portals = Portals()
-  result.portal_aabb_tree = init_dynamic_aabb_tree[SpecificPortalsHandle](fat_margin = 0'f32)
+  result.portal_aabb_tree = init_dynamic_aabb_tree[SpecificPortalsHandle](fat_margin = portal_border_radius)
 
 proc tick_world*(world_index: int) =
   let start = get_mono_time()
@@ -159,6 +161,10 @@ proc tick_world*(world_index: int) =
             )
             world.narrowphase_pool.add_a2s_broadphase_result((body: handle, static_bb: world_bb))
 
+  let broadphase = get_mono_time()
+
+  world.portal_border_manifolds.setLen 0
+  
   for dense_idx in 0 ..< data.local_pos.len:
     let handle = data.body_handle_at_dense(dense_idx)
     let body_aabb = data.aabb(handle)
@@ -168,23 +174,30 @@ proc tick_world*(world_index: int) =
       else: CompositionObj(kind: ck_parted, parts: parts)
     )
 
-  let broadphase = get_mono_time()
+    for portal_leaf_idx in world.portal_aabb_tree.query(body_aabb):
+      let portal_handle = world.portal_aabb_tree.data portal_leaf_idx
+      let portal = world.portals.portal(portal_handle.handle)
+      let manifold = generate_a2s_cuboid_portal_border_manifold(handle, portal_handle, world.narrowphase_pool, world.portals, portal_border_radius)
+      if manifold.contact_count > 0:
+        world.portal_border_manifolds.add manifold
+
+  let portals = get_mono_time()
 
   world.narrowphase_pool.dispatch_narrowphase_and_wait()
 
   let narrowphase = get_mono_time()
 
-  world.a2a_contact_manifolds.setLen(0)
-  world.a2s_contact_manifolds.setLen(0)
-  for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
-    let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
-    for output_idx in 0 ..< worker_count:
-      let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
-      case result.kind
-      of nrk_a2a:
-        world.a2a_contact_manifolds.add result.a2a
-      of nrk_a2s:
-        world.a2s_contact_manifolds.add result.a2s
+  # world.a2a_contact_manifolds.setLen(0)
+  # world.a2s_contact_manifolds.setLen(0)
+  # for worker_idx in 0 ..< world.narrowphase_pool.worker_count:
+  #   let worker_count = world.narrowphase_pool.worker_output_count(worker_idx)
+  #   for output_idx in 0 ..< worker_count:
+  #     let result = world.narrowphase_pool.worker_output_at(worker_idx, output_idx)
+  #     case result.kind
+  #     of nrk_a2a:
+  #       world.a2a_contact_manifolds.add result.a2a
+  #     of nrk_a2s:
+  #       world.a2s_contact_manifolds.add result.a2s
 
   let Δt = world.Δt
   for i in 0 ..< data.local_pos.len:
@@ -196,6 +209,7 @@ proc tick_world*(world_index: int) =
     Δt,
     world.a2a_warm_start,
     world.a2s_warm_start,
+    world.portal_border_manifolds,
   )
   world.velocity_constraints.solve_velocity_constraints(data, normal_iterations, friction_iterations, velocity_solve_sor)
   world.velocity_constraints.rebuild_warm_start_cache(world.a2a_warm_start, world.a2s_warm_start)
@@ -243,7 +257,8 @@ proc tick_world*(world_index: int) =
 
   # echo "| total=", in_microseconds(finish - start), "μs"
   # echo "| broadphase=", in_microseconds(broadphase - start), "μs"
-  # echo "| narrowphase=", in_microseconds(narrowphase - broadphase), "μs"
+  # echo "| broadphase=", in_microseconds(portals - broadphase), "μs"
+  # echo "| narrowphase=", in_microseconds(narrowphase - portals), "μs"
   # echo "| constraint_solving=", in_microseconds(constraint_solving - narrowphase), "μs"
   # echo "| integrating=", in_microseconds(integrating - constraint_solving), "μs"
 
@@ -338,6 +353,14 @@ proc get_a2s_narrowphase_manifold*(world: World, manifold_index: int): A2sCollis
   if manifold_index < 0 or manifold_index >= world.a2s_contact_manifolds.len:
     raise newException(IndexDefect, "a2s narrowphase manifold index out of range")
   world.a2s_contact_manifolds[manifold_index]
+
+proc portal_border_manifold_count*(world: World): int =
+  world.portal_border_manifolds.len
+
+proc get_portal_border_manifold*(world: World, manifold_index: int): A2sCollisionManifold =
+  if manifold_index < 0 or manifold_index >= world.portal_border_manifolds.len:
+    raise newException(IndexDefect, "portal border manifold index out of range")
+  world.portal_border_manifolds[manifold_index]
 
 proc num_aabb_tree_nodes*(world: World): int =
   for node in world.aabb_tree.nodes:

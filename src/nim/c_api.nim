@@ -351,6 +351,17 @@ proc c_get_a2s_collision_result(world_index: cint, collision_index: cint): C_A2s
 
   result = world.get_a2s_narrowphase_manifold(collision_index.int)
 
+proc c_get_portal_border_manifold(world_index: cint, manifold_index: cint): C_A2sCollisionManifold {.cdecl, exportc, dynlib.} =
+  let world = get_world(world_index)
+  if world.is_nil:
+    return invalid_a2s_collision_manifold()
+  if manifold_index < 0:
+    return invalid_a2s_collision_manifold()
+  if manifold_index.int >= world.portal_border_manifold_count():
+    return invalid_a2s_collision_manifold()
+
+  result = world.get_portal_border_manifold(manifold_index.int)
+
 proc c_greedy_mesh*(
   origin_x, origin_y, origin_z: cint;
   chunk_binary_data: ptr ChunkBinaryData,

@@ -11,7 +11,7 @@ class Nimcube : JavaPlugin() {
     val nimWorlds = ConcurrentHashMap<World, NimWorld>()
 
     val Δt = 0.05f / 3f
-    val acceleration = Vector3f(0f, 0f, 0f)
+    val acceleration = Vector3f(0f, -3f, 0f)
 
     override fun onEnable() {
         GreedyMeshTestCommand(this).init()
