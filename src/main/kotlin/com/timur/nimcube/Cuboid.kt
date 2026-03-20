@@ -1,15 +1,15 @@
 package com.timur.nimcube
 
+import net.kyori.adventure.key.Key
+import net.kyori.adventure.text.Component
 import org.bukkit.Color
 import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.entity.BlockDisplay
 import org.bukkit.entity.EntityType
+import org.bukkit.entity.TextDisplay
 import org.bukkit.util.Transformation
-import org.joml.Matrix4f
-import org.joml.Quaternionf
-import org.joml.Vector3d
-import org.joml.Vector3f
+import org.joml.*
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import kotlin.random.Random
@@ -57,7 +57,7 @@ class Cuboid(
     val worldIndex = nimWorld.worldIndex
 
     private var display: BlockDisplay? = null
-    private val triangleDisplays = mutableListOf<BlockDisplay>()
+    private val triangleDisplays = mutableListOf<TextDisplay>()
     private val meshColors = ArrayList<Color>()
     private val meshParticleInterval = 0.2f
     private val meshParticleSize = 0.4f
@@ -118,7 +118,7 @@ class Cuboid(
         for (mesh in meshes) neededTriangles += triangulateMesh(mesh).size
         ensureTriangleDisplays(neededTriangles * 3)
         var triangleIndex = 0
-        for (disp in triangleDisplays) disp.block = Material.AIR.createBlockData()
+        for (disp in triangleDisplays) disp.text(Component.empty())
         for (mesh in meshes)
             for (triangle in triangulateMesh(mesh)) {
                 val a = triangle.a
@@ -137,59 +137,64 @@ class Cuboid(
                 val halfAB2halfBC = b.add(halfBC, Vector3f()).sub(a).sub(halfAB)
 
                 val norm = ab.cross(ac, Vector3f()).normalize()
-                val normThin = norm.mul(0.03f, Vector3f())
 
                 val l1 = triangle.a.d
-                val m1 = Matrix4f(
-                    normThin.x, normThin.y, normThin.z, 0f,
-                    halfAB.x, halfAB.y, halfAB.z, 0f,
-                    halfAC.x, halfAC.y, halfAC.z, 0f,
-                    0f, 0f, 0f, 1f,
+                val m1 = Matrix3f(
+                    halfAB.x, halfAB.y, halfAB.z,
+                    halfAC.x, halfAC.y, halfAC.z,
+                    norm.x, norm.y, norm.z,
                 )
+                val t1 = offsetFix.mul(m1, Vector3f())
 
                 val l2 = triangle.a.add(halfAB, Vector3f()).d
-                val m2 = Matrix4f(
-                    normThin.x, normThin.y, normThin.z, 0f,
-                    halfAB.x, halfAB.y, halfAB.z, 0f,
-                    halfAB2halfAC.x, halfAB2halfAC.y, halfAB2halfAC.z, 0f,
-                    0f, 0f, 0f, 1f,
+                val m2 = Matrix3f(
+                    halfAB.x, halfAB.y, halfAB.z,
+                    halfAB2halfAC.x, halfAB2halfAC.y, halfAB2halfAC.z,
+                    norm.x, norm.y, norm.z,
                 )
+                val t2 = offsetFix.mul(m2, Vector3f())
 
                 val l3 = Vector3d(l2)
-                val m3 = Matrix4f(
-                    normThin.x, normThin.y, normThin.z, 0f,
-                    halfAB2halfBC.x, halfAB2halfBC.y, halfAB2halfBC.z, 0f,
-                    halfAB2halfAC.x, halfAB2halfAC.y, halfAB2halfAC.z, 0f,
-                    0f, 0f, 0f, 1f,
+                val m3 = Matrix3f(
+                    halfAB2halfBC.x, halfAB2halfBC.y, halfAB2halfBC.z,
+                    halfAB2halfAC.x, halfAB2halfAC.y, halfAB2halfAC.z,
+                    norm.x, norm.y, norm.z,
                 )
+                val t3 = offsetFix.mul(m3, Vector3f())
 
                 val disp1 = triangleDisplays[triangleIndex++]
-                disp1.block = Material.WHITE_CONCRETE.createBlockData()
-                disp1.setTransformationMatrix(m1)
+                disp1.text(pixel)
+                disp1.setTransformationMatrix(Matrix4f(m1))
                 disp1.teleport(
                     Location(
                         bukkitWorld,
-                        l1.x, l1.y, l1.z,
+                        l1.x + t1.x,
+                        l1.y + t1.y,
+                        l1.z + t1.z,
                     )
                 )
 
                 val disp2 = triangleDisplays[triangleIndex++]
-                disp2.block = Material.WHITE_CONCRETE.createBlockData()
-                disp2.setTransformationMatrix(m2)
+                disp2.text(pixel)
+                disp2.setTransformationMatrix(Matrix4f(m2))
                 disp2.teleport(
                     Location(
                         bukkitWorld,
-                        l2.x, l2.y, l2.z,
+                        l2.x + t2.x,
+                        l2.y + t2.y,
+                        l2.z + t2.z,
                     )
                 )
 
                 val disp3 = triangleDisplays[triangleIndex++]
-                disp3.block = Material.WHITE_CONCRETE.createBlockData()
-                disp3.setTransformationMatrix(m3)
+                disp3.text(pixel)
+                disp3.setTransformationMatrix(Matrix4f(m3))
                 disp3.teleport(
                     Location(
                         bukkitWorld,
-                        l3.x, l3.y, l3.z,
+                        l3.x + t3.x,
+                        l3.y + t3.y,
+                        l3.z + t3.z,
                     )
                 )
             }
@@ -223,9 +228,10 @@ class Cuboid(
         while (triangleDisplays.size < needed) {
             val disp = bukkitWorld.spawnEntity(
                 display!!.location,
-                EntityType.BLOCK_DISPLAY,
-            ) as BlockDisplay
-            disp.block = Material.AIR.createBlockData()
+                EntityType.TEXT_DISPLAY,
+            ) as TextDisplay
+            disp.text(Component.empty())
+            disp.backgroundColor = Color.fromARGB(0)
             disp.transformation = createTransformation(Quaternionf(), Vector3f())
             disp.interpolationDuration = 0
             disp.interpolationDelay = -1
@@ -245,3 +251,6 @@ class Cuboid(
 
 val Vector3f.d: Vector3d
     get() = Vector3d(x.toDouble(), y.toDouble(), z.toDouble())
+
+private val pixel = Component.text("\u00a1").font(Key.key("nimcube", "pixel"))
+private val offsetFix = Vector3f(0.5f - 0.0125f, 0f, 0f)
