@@ -303,6 +303,18 @@ proc c_get_global_cuboid_dimensions(world_index: cint, handle: PackedHandle): C_
   if world.is_nil: return C_F3(x: 0'f32, y: 0'f32, z: 0'f32)
   result = world.global_dimensions handle
 
+proc c_get_cuboid_mesh_data(
+  buffer: ptr uint8,
+  buffer_size: cint,
+  world_index: cint,
+  handle: PackedHandle,
+): bool {.cdecl, exportc, dynlib.} =
+  let world = get_world(world_index)
+  if world.is_nil:
+    return false
+
+  result = world.write_mesh_data(handle, buffer, buffer_size.int32)
+
 proc c_num_aabb_tree_nodes(world_index: cint): cint {.cdecl, exportc, dynlib.} =
   let world = get_world(world_index)
   if world.is_nil: return -1

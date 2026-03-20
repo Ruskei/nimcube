@@ -7,6 +7,7 @@ import org.bukkit.World
 import org.bukkit.scheduler.BukkitTask
 import org.joml.Vector3f
 import java.lang.foreign.Arena
+import java.lang.foreign.MemorySegment
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.round
@@ -25,6 +26,8 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
     var physicsThread: BukkitTask? = null
     var bukkitThread: BukkitTask? = null
     var physicsFrozen = false
+    private val meshArena = Arena.ofShared()
+    val cuboidMeshBuffer: MemorySegment = meshArena.allocate(1024 * 1024L)
 
     val potentialBodyHandles = ConcurrentLinkedDeque<Nim.PotentialBodyHandle>()
     val potentialPortalHandles = ConcurrentLinkedDeque<Nim.PotentialPortalHandle>()
@@ -184,7 +187,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
                 i--
             }
 
-            cuboids.forEach { it.update(arena) }
+            cuboids.forEach { it.update(arena, cuboidMeshBuffer) }
             portals.forEach { it.update(arena) }
         }
     }
@@ -194,5 +197,6 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
         portals.forEach { it.deinit() }
         physicsThread?.cancel()
         bukkitThread?.cancel()
+        meshArena.close()
     }
 }

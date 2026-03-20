@@ -85,6 +85,7 @@ class Nim(plugin: Nimcube) {
     val getA2sCollisionResultHandle: MethodHandle
     val getGlobalCuboidRotHandle: MethodHandle
     val getGlobalCuboidDimensionsHandle: MethodHandle
+    val getCuboidMeshDataHandle: MethodHandle
 //    val getCuboidInverseMassHandle: MethodHandle
 
     val C_D3 = MemoryLayout.structLayout(
@@ -192,6 +193,11 @@ class Nim(plugin: Nimcube) {
         val maxX: Float,
         val maxY: Float,
         val maxZ: Float,
+    )
+
+    data class Mesh(
+        val vertices: ArrayList<Vector3f>,
+        val faces: ArrayList<IntArray>,
     )
 
     data class CollisionContactPoint(
@@ -376,6 +382,13 @@ class Nim(plugin: Nimcube) {
             FunctionDescriptor.of(
                 C_F3,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+            )
+        )
+        getCuboidMeshDataHandle = linker.downcallHandle(
+            lookup.findOrThrow("c_get_cuboid_mesh_data"),
+            FunctionDescriptor.of(
+                ValueLayout.JAVA_BOOLEAN,
+                ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
             )
         )
         isCuboidValidHandle = linker.downcallHandle(
@@ -743,6 +756,80 @@ class Nim(plugin: Nimcube) {
             segment.getAtIndex(ValueLayout.JAVA_FLOAT, 1),
             segment.getAtIndex(ValueLayout.JAVA_FLOAT, 2),
         )
+    }
+
+    fun getCuboidMeshes(worldIndex: WorldIndex, handle: BodyHandle, buffer: MemorySegment): ArrayList<Mesh>? {
+        val size = buffer.byteSize()
+        require(size <= Int.MAX_VALUE) { "Buffer too large for native API: $size bytes" }
+
+        val success = getCuboidMeshDataHandle.invokeExact(
+            buffer,
+            size.toInt(),
+            worldIndex.index,
+            handle.asLong,
+        ) as Boolean
+        if (!success) {
+            return null
+        }
+
+        return deserializeMeshes(buffer)
+    }
+
+    private fun deserializeMeshes(buffer: MemorySegment): ArrayList<Mesh> {
+        var offset = 0L
+
+        fun requireBytes(byteCount: Long) {
+            check(offset + byteCount <= buffer.byteSize()) {
+                "Mesh buffer underflow at offset $offset for $byteCount bytes"
+            }
+        }
+
+        fun readInt(): Int {
+            requireBytes(4)
+            val value = buffer.get(ValueLayout.JAVA_INT, offset)
+            offset += 4
+            return value
+        }
+
+        fun readFloat(): Float {
+            requireBytes(4)
+            val value = buffer.get(ValueLayout.JAVA_FLOAT, offset)
+            offset += 4
+            return value
+        }
+
+        val meshCount = readInt()
+        check(meshCount >= 0) { "Negative mesh count: $meshCount" }
+
+        val meshes = ArrayList<Mesh>(meshCount)
+        repeat(meshCount) {
+            val vertexCount = readInt()
+            check(vertexCount >= 0) { "Negative vertex count: $vertexCount" }
+
+            val vertices = ArrayList<Vector3f>(vertexCount)
+            repeat(vertexCount) {
+                vertices += Vector3f(readFloat(), readFloat(), readFloat())
+            }
+
+            val faceCount = readInt()
+            check(faceCount >= 0) { "Negative face count: $faceCount" }
+
+            val faces = ArrayList<IntArray>(faceCount)
+            repeat(faceCount) {
+                val indexCount = readInt()
+                check(indexCount >= 0) { "Negative face index count: $indexCount" }
+
+                val face = IntArray(indexCount)
+                for (idx in 0 until indexCount) {
+                    face[idx] = readInt()
+                }
+                faces += face
+            }
+
+            meshes += Mesh(vertices = vertices, faces = faces)
+        }
+
+        return meshes
     }
 
     fun greedyMesh(originX: Int, originY: Int, originZ: Int, chunkBinaryData: MemorySegment): Int =

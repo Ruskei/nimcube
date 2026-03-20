@@ -12,6 +12,8 @@ import meshing
 import narrowphase
 import rw_lock
 import portal
+import portal_object_constructor
+import part
 
 export chunk_positions
 
@@ -160,12 +162,11 @@ proc tick_world*(world_index: int) =
   for dense_idx in 0 ..< data.local_pos.len:
     let handle = data.body_handle_at_dense(dense_idx)
     let body_aabb = data.aabb(handle)
-
-    for portal_leaf_idx in world.portal_aabb_tree.query(body_aabb):
-      let portal_handle = world.portal_aabb_tree.data portal_leaf_idx
-      let portal = world.portals.portal(portal_handle.handle)
-      let collides = cuboid_collides_with_portal(handle, portal_handle, world.narrowphase_pool, world.portals)
-      if collides: echo "collides!"
+    let parts = construct_parts_from_body(handle, data, world.portals, world.portal_aabb_tree)
+    data.set_composition(handle,
+      if parts.len == 1: CompositionObj(kind: ck_simple)
+      else: CompositionObj(kind: ck_parted, parts: parts)
+    )
 
   let broadphase = get_mono_time()
 
@@ -270,6 +271,25 @@ proc global_dimensions*(world: World, handle: BodyHandle): F3 =
     let dense = world.external_data.dense_idx_no_lock(handle)
     if dense >= 0:
       result = world.external_data.dimensions[dense]
+
+proc write_mesh_data*(world: World, handle: BodyHandle, buffer: ptr uint8, buffer_size: int32): bool =
+  if world.is_nil or buffer_size < 0:
+    return false
+
+  with_read_lock(world.external_data.lock):
+    let dense = world.external_data.dense_idx_no_lock(handle)
+    if dense < 0:
+      return false
+
+    let mesh = world.external_data.mesh[dense]
+    if mesh.data_len > buffer_size:
+      return false
+    if mesh.data_len > 0 and buffer.is_nil:
+      return false
+
+    if mesh.data_len > 0:
+      copyMem(buffer, mesh.data, mesh.data_len.int)
+    result = true
 
 proc aabb_tree_leaf_count*(world: World): int =
   world.aabb_tree.leaf_count

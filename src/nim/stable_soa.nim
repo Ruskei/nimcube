@@ -170,6 +170,13 @@ proc build_field_accessor(field_name, field_type, name, handle_name: NimNode): N
     proc `field_name`*(data: `name`, handle: `handle_name`): `field_type` =
       result = data.`field_name`[data.slot_to_dense[handle.slot]]
 
+proc build_field_mutator(field_name, field_type, name, handle_name: NimNode): NimNode =
+  let setter_name = ident("set_" & $field_name)
+  quote do:
+    proc `setter_name`*(data: `name`, handle: `handle_name`, value: `field_type`) =
+      if data.is_valid(handle):
+        data.`field_name`[data.slot_to_dense[handle.slot]] = value
+
 macro declare_stable_soa_type*(name: untyped, body: untyped): untyped =
   let handle_name = ident($name & "Handle")
   let fields = parse_soa_fields(body)
@@ -183,6 +190,7 @@ macro declare_stable_soa_type*(name: untyped, body: untyped): untyped =
 
   for field in fields:
     result.add build_field_accessor(field.field_name, field.field_type, name, handle_name)
+    result.add build_field_mutator(field.field_name, field.field_type, name, handle_name)
 
   # echo result.repr
 

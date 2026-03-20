@@ -7,9 +7,9 @@ import physics_math
 import rw_lock
 import packed_handle
 import dynamic_aabb_tree
-import portal
 import array_util
 import stable_soa
+import part
 
 declare_stable_soa_type InternalData:
   initial_pos: D3
@@ -25,12 +25,17 @@ declare_stable_soa_type InternalData:
   cached_inverse_inertia_diag: F3
   cached_aabb: FBB
   aabb_node_idx: NodeIndex
+  composition: CompositionObj
 
 type
+  UnsafeMesh = object
+    data*: ptr UncheckedArray[uint8]
+    data_len*: int32
   ExternalData* = object
     pos*: ptr UncheckedArray[D3]
     rot*: ptr UncheckedArray[QF]
     dimensions*: ptr UncheckedArray[F3]
+    mesh*: ptr UncheckedArray[UnsafeMesh]
 
     dense_to_slot*: ptr UncheckedArray[int]
     slot_to_dense*: ptr UncheckedArray[int]
@@ -54,10 +59,69 @@ converter body_to_internal*(handle: BodyHandle): InternalDataHandle =
 
 const slot_invalid = -1
 
+proc as_int32(value: int): int32 =
+  doAssert value >= low(int32).int
+  doAssert value <= high(int32).int
+  value.int32
+
+proc free_serialized_mesh(mesh: var UnsafeMesh) =
+  if mesh.data != nil:
+    deallocShared(mesh.data)
+    mesh.data = nil
+  mesh.data_len = 0'i32
+
+proc serialized_composition_size(composition: CompositionObj): int32 =
+  result = sizeof(int32).int32
+  case composition.kind
+  of ck_simple:
+    discard
+  of ck_parted:
+    for part in composition.parts:
+      result += sizeof(int32).int32
+      result += (part.mesh.vertices.len * 3 * sizeof(float32)).int32
+      result += sizeof(int32).int32
+      for face in part.mesh.faces:
+        result += sizeof(int32).int32
+        result += (face.len * sizeof(int32)).int32
+
+proc write_value[T](buffer: ptr UncheckedArray[uint8], offset: var int, value: T) =
+  var tmp = value
+  copyMem(addr buffer[offset], addr tmp, sizeof(T))
+  offset += sizeof(T)
+
+proc write_vertex(buffer: ptr UncheckedArray[uint8], offset: var int, vertex: F3) =
+  buffer.write_value(offset, vertex.x.float32)
+  buffer.write_value(offset, vertex.y.float32)
+  buffer.write_value(offset, vertex.z.float32)
+
+proc serialize_composition(mesh: var UnsafeMesh, composition: CompositionObj) =
+  mesh.free_serialized_mesh()
+  mesh.data_len = composition.serialized_composition_size()
+  mesh.data = cast[ptr UncheckedArray[uint8]](allocShared0(mesh.data_len.int))
+
+  var offset = 0
+  case composition.kind
+  of ck_simple:
+    mesh.data.write_value(offset, 0'i32)
+  of ck_parted:
+    mesh.data.write_value(offset, composition.parts.len.as_int32)
+    for part in composition.parts:
+      mesh.data.write_value(offset, part.mesh.vertices.len.as_int32)
+      for vertex in part.mesh.vertices:
+        mesh.data.write_vertex(offset, vertex)
+      mesh.data.write_value(offset, part.mesh.faces.len.as_int32)
+      for face in part.mesh.faces:
+        mesh.data.write_value(offset, face.len.as_int32)
+        for index in face:
+          mesh.data.write_value(offset, index.as_int32)
+
+  doAssert offset == mesh.data_len.int
+
 proc init_external_data*(data: var ExternalData) =
   data.pos = nil
   data.rot = nil
   data.dimensions = nil
+  data.mesh = nil
   data.dense_to_slot = nil
   data.slot_to_dense = nil
   data.generation = nil
@@ -77,6 +141,11 @@ proc deinit_external_data*(data: var ExternalData) =
   if data.dimensions != nil:
     deallocShared(data.dimensions)
     data.dimensions = nil
+  if data.mesh != nil:
+    for i in 0 ..< data.body_count:
+      data.mesh[i].free_serialized_mesh()
+    deallocShared(data.mesh)
+    data.mesh = nil
   if data.dense_to_slot != nil:
     deallocShared(data.dense_to_slot)
     data.dense_to_slot = nil
@@ -96,12 +165,14 @@ proc update_external_data*(internal_data: InternalData, external_data: var Exter
   with_write_lock(external_data.lock):
     let body_count = internal_data.local_pos.len
     let slot_count = internal_data.slot_to_dense.len
+    let previous_body_count = external_data.body_count
 
     if external_data.body_capacity < body_count:
       let new_body_capacity = grown_capacity(external_data.body_capacity, body_count)
       resize_shared_array(external_data.pos, external_data.body_capacity, new_body_capacity)
       resize_shared_array(external_data.rot, external_data.body_capacity, new_body_capacity)
       resize_shared_array(external_data.dimensions, external_data.body_capacity, new_body_capacity)
+      resize_shared_array(external_data.mesh, external_data.body_capacity, new_body_capacity)
       resize_shared_array(external_data.dense_to_slot, external_data.body_capacity, new_body_capacity)
       external_data.body_capacity = new_body_capacity
 
@@ -111,19 +182,23 @@ proc update_external_data*(internal_data: InternalData, external_data: var Exter
       resize_shared_array(external_data.generation, external_data.slot_capacity, new_slot_capacity)
       external_data.slot_capacity = new_slot_capacity
 
-    external_data.body_count = body_count
-    external_data.slot_count = slot_count
+    for i in 0 ..< previous_body_count:
+      external_data.mesh[i].free_serialized_mesh()
 
     for i in 0 ..< body_count:
       let local_pos: D3 = internal_data.local_pos[i]
       external_data.pos[i] = internal_data.initial_pos[i] + local_pos
       external_data.rot[i] = internal_data.rot[i]
       external_data.dimensions[i] = internal_data.dimensions[i]
+      external_data.mesh[i].serialize_composition(internal_data.composition[i])
       external_data.dense_to_slot[i] = internal_data.dense_to_slot[i]
 
     for i in 0 ..< slot_count:
       external_data.slot_to_dense[i] = internal_data.slot_to_dense[i]
       external_data.generation[i] = internal_data.generation[i].uint
+
+    external_data.body_count = body_count
+    external_data.slot_count = slot_count
 
 converter from_packed*(handle: PackedHandle): BodyHandle =
   result.slot = handle.slot
@@ -222,7 +297,8 @@ proc create_cuboid*(
     cached_world_axes = default(array[3, F3]),
     cached_inverse_inertia_diag = inverse_inertia(dimensions, inverse_mass),
     cached_aabb = default(FBB),
-    aabb_node_idx = invalid_node_index
+    aabb_node_idx = invalid_node_index,
+    composition = CompositionObj(kind: ck_simple),
   )
 
   let dense = data.slot_to_dense[result.slot]
@@ -238,6 +314,13 @@ proc remove_cuboid*(data: InternalData, aabb_tree: DynamicAabbTree[BodyHandle], 
     discard aabb_tree.remove(node_idx)
 
   result = data.remove handle
+
+proc part*(data: InternalData, handle: BodyHandle): PartObj =
+  init_cuboid_part(
+    position = data.cached_center(handle),
+    quat = data.rot(handle),
+    dimensions = data.dimensions(handle),
+  )
 
 proc aabb*(data: InternalData, handle: BodyHandle): FBB =
   data.cached_aabb handle
