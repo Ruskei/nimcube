@@ -66,7 +66,7 @@ class NimWorld(val plugin: Nimcube, val bukkitWorld: World, val dt: Float, val a
             }
         }
 
-        println("physicsFrameDuration=$physicsFrameDuration")
+//        println("physicsFrameDuration=$physicsFrameDuration")
     }
 
     private fun renderPhysicsDebug() {

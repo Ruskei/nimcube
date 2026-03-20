@@ -198,7 +198,15 @@ class Nim(plugin: Nimcube) {
     data class Mesh(
         val vertices: ArrayList<Vector3f>,
         val faces: ArrayList<IntArray>,
-    )
+    ) {
+        fun center(): Vector3f {
+            val c = Vector3f()
+            if (vertices.isEmpty()) return c
+            for (v in vertices)
+                c.add(v.div(vertices.size.toFloat(), Vector3f()))
+            return c
+        }
+    }
 
     data class CollisionContactPoint(
         val position: Vector3f,
@@ -634,7 +642,8 @@ class Nim(plugin: Nimcube) {
         numAabbTreeNodesHandle.invokeExact(worldIndex.index) as Int
 
     fun getAabbTreeNode(arena: Arena, worldIndex: WorldIndex, nodeIndex: Int): FBB {
-        val segment = getAabbTreeNodeHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, nodeIndex) as MemorySegment
+        val segment =
+            getAabbTreeNodeHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, nodeIndex) as MemorySegment
         return FBB(
             segment.get(ValueLayout.JAVA_FLOAT, 0),
             segment.get(ValueLayout.JAVA_FLOAT, 4),
@@ -646,7 +655,11 @@ class Nim(plugin: Nimcube) {
     }
 
     fun getA2aCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2aCollisionResult {
-        val segment = getA2aCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
+        val segment = getA2aCollisionResultHandle.invokeExact(
+            arena as SegmentAllocator,
+            worldIndex.index,
+            collisionIndex
+        ) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
         val contactPointBaseOffset = 20L
         val contactPointStride = 28L
@@ -683,7 +696,11 @@ class Nim(plugin: Nimcube) {
     }
 
     fun getA2sCollisionResult(arena: Arena, worldIndex: WorldIndex, collisionIndex: Int): A2sCollisionResult {
-        val segment = getA2sCollisionResultHandle.invokeExact(arena as SegmentAllocator, worldIndex.index, collisionIndex) as MemorySegment
+        val segment = getA2sCollisionResultHandle.invokeExact(
+            arena as SegmentAllocator,
+            worldIndex.index,
+            collisionIndex
+        ) as MemorySegment
         val contactPoints = ArrayList<CollisionContactPoint>(4)
         val contactPointBaseOffset = 12L
         val contactPointStride = 28L
