@@ -203,6 +203,9 @@ proc tick_world*(world_index: int) =
   let constraint_solving = get_mono_time()
 
   for i in 0 ..< data.local_pos.len:
+    let initial_pos: F3 = data.initial_pos[i]
+    let prev_pos = data.local_pos[i]
+
     let displacement = data.vel[i] * Δt
     data.local_pos[i] += displacement
     let ω = data.ω[i]
@@ -210,6 +213,25 @@ proc tick_world*(world_index: int) =
     let q = data.rot[i]
     data.rot[i] = normalized(q + (0.5'f32 * Δt) * (spin * q))
     data.update_body_collision_cache(i)
+
+    let curr_pos = data.local_pos[i]
+
+    let aabb = data.cached_aabb[i]
+    for portal_leaf_idx in world.portal_aabb_tree.query(aabb):
+      let portal_handle = world.portal_aabb_tree.data portal_leaf_idx
+      let portal = world.portals.portal(portal_handle.handle)
+      let (portal_from_origin, portal_from_quat, portal_to_origin, portal_to_quat) = case portal_handle.which
+        of wp_a: (portal.origin_a, portal.quat_a, portal.origin_b, portal.quat_b)
+        of wp_b: (portal.origin_b, portal.quat_b, portal.origin_a, portal.quat_a)
+      if segment_collides_with_portal_side(initial_pos + prev_pos, initial_pos + curr_pos, portal_from_origin, portal_from_quat, portal.scale_x, portal.scale_y):
+        let rotation = normalized(portal_to_quat * conjugate(portal_from_quat))
+        data.local_pos[i] = portal_to_origin + rotation.rotate_vector(initial_pos + curr_pos - portal_from_origin) - initial_pos
+        data.rot[i] = rotation * data.rot[i]
+        data.vel[i] = rotation.rotate_vector(data.vel[i])
+        data.ω[i] = rotation.rotate_vector(data.ω[i])
+        data.update_body_collision_cache(i)
+        break
+
     data.update_cuboid_aabb(world.aabb_tree, i, displacement)
 
   let integrating = get_mono_time()

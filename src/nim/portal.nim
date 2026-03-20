@@ -26,6 +26,10 @@ const invalid_portal* = Portal(
   scale_y: -1'f32,
 )
 
+const
+  portal_segment_axis_epsilon = 1.0e-6'f32
+  portal_segment_clip_epsilon = 1.0e-5'f32
+
 declare_stable_soa_type Portals:
   portal: Portal
   aabb_index: tuple[a: NodeIndex, b: NodeIndex]
@@ -167,6 +171,79 @@ proc aabb*(portal: Portal): tuple[a: FBB, b: FBB] =
     if corner_b.x > result.b.max.x: result.b.max.x = corner_b.x
     if corner_b.y > result.b.max.y: result.b.max.y = corner_b.y
     if corner_b.z > result.b.max.z: result.b.max.z = corner_b.z
+
+proc segment_intersects_portal_rectangle_2d(
+  start_point, end_point, portal_half_extents: F3,
+): bool =
+  var t_min = 0'f32
+  var t_max = 1'f32
+
+  let delta_x = end_point.x - start_point.x
+  if abs(delta_x) <= portal_segment_axis_epsilon:
+    if abs(start_point.x) > portal_half_extents.x + portal_segment_clip_epsilon:
+      return false
+  else:
+    var axis_t_min = (-portal_half_extents.x - start_point.x) / delta_x
+    var axis_t_max = (portal_half_extents.x - start_point.x) / delta_x
+    if axis_t_min > axis_t_max:
+      swap(axis_t_min, axis_t_max)
+    if axis_t_min > t_min:
+      t_min = axis_t_min
+    if axis_t_max < t_max:
+      t_max = axis_t_max
+    if t_min > t_max:
+      return false
+
+  let delta_y = end_point.y - start_point.y
+  if abs(delta_y) <= portal_segment_axis_epsilon:
+    if abs(start_point.y) > portal_half_extents.y + portal_segment_clip_epsilon:
+      return false
+  else:
+    var axis_t_min = (-portal_half_extents.y - start_point.y) / delta_y
+    var axis_t_max = (portal_half_extents.y - start_point.y) / delta_y
+    if axis_t_min > axis_t_max:
+      swap(axis_t_min, axis_t_max)
+    if axis_t_min > t_min:
+      t_min = axis_t_min
+    if axis_t_max < t_max:
+      t_max = axis_t_max
+    if t_min > t_max:
+      return false
+
+  true
+
+proc segment_collides_with_portal_side*(
+  start_point, end_point: F3,
+  portal_center: F3,
+  portal_quat: QF,
+  scale_x, scale_y: float32,
+): bool =
+  if scale_x <= 0'f32 or scale_y <= 0'f32:
+    return false
+
+  let normalized_quat = portal_quat.normalized
+  let inv_quat = conjugate(normalized_quat)
+  let portal_half_extents: F3 = (scale_x * 0.5'f32, scale_y * 0.5'f32, 0'f32)
+  let start_local = rotate_vector(inv_quat, start_point - portal_center)
+  let end_local = rotate_vector(inv_quat, end_point - portal_center)
+
+  let start_distance = start_local.z
+  let end_distance = end_local.z
+
+  if abs(start_distance) <= portal_segment_clip_epsilon and abs(end_distance) <= portal_segment_clip_epsilon:
+    return segment_intersects_portal_rectangle_2d(start_local, end_local, portal_half_extents)
+
+  let denominator = start_distance - end_distance
+  if abs(denominator) <= portal_segment_axis_epsilon:
+    return false
+
+  let t = start_distance / denominator
+  if t < -portal_segment_clip_epsilon or t > 1'f32 + portal_segment_clip_epsilon:
+    return false
+
+  let hit_point = lerp(start_local, end_local, t)
+  abs(hit_point.x) <= portal_half_extents.x + portal_segment_clip_epsilon and
+    abs(hit_point.y) <= portal_half_extents.y + portal_segment_clip_epsilon
 
 proc add_portal*(
   portals: Portals,

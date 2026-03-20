@@ -2,7 +2,6 @@ import std/algorithm
 from std/math import arctan2
 
 import physics_math
-import portal
 
 const
   slice_axis_epsilon = 1.0e-6'f32

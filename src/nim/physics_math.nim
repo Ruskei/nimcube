@@ -26,6 +26,11 @@ converter f3_to_d3*(v: F3): D3 =
   result.y = v.y.float64
   result.z = v.z.float64
 
+converter d3_to_f3*(v: D3): F3 =
+  result.x = v.x.float32
+  result.y = v.y.float32
+  result.z = v.z.float32
+
 proc overlaps*[T](a, b: BB[T]): bool =
   a.min.x < b.max.x and a.max.x > b.min.x and
   a.min.y < b.max.y and a.max.y > b.min.y and

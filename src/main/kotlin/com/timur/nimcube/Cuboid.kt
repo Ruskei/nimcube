@@ -137,7 +137,7 @@ class Cuboid(
                 val halfAB2halfBC = b.add(halfBC, Vector3f()).sub(a).sub(halfAB)
 
                 val norm = ab.cross(ac, Vector3f()).normalize()
-                val normThin = norm.mul(0.01f, Vector3f())
+                val normThin = norm.mul(0.03f, Vector3f())
 
                 val l1 = triangle.a.d
                 val m1 = Matrix4f(
@@ -227,9 +227,9 @@ class Cuboid(
             ) as BlockDisplay
             disp.block = Material.AIR.createBlockData()
             disp.transformation = createTransformation(Quaternionf(), Vector3f())
-            disp.interpolationDuration = 1
-            disp.interpolationDelay = 0
-            disp.teleportDuration = 1
+            disp.interpolationDuration = 0
+            disp.interpolationDelay = -1
+            disp.teleportDuration = 0
 
             triangleDisplays += disp
         }
